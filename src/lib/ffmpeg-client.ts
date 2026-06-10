@@ -19,12 +19,24 @@ export async function getFFmpeg(onLog?: (msg: string) => void): Promise<FFmpeg> 
     ffmpeg.on("log", globalLogListener);
 
     try {
-      // CRITICAL FIX: Both files must be wrapped in toBlobURL with correct MIME types.
-      // Passing a direct URL for wasmURL causes MIME type / CORS failures in proxied
-      // environments (Replit, iframes). toBlobURL fetches → stores in a local blob://
-      // URL → browser accepts it without CORS or MIME checks.
+      // ROOT CAUSE FIX (layered):
+      //
+      // @ffmpeg/ffmpeg in Vite ESM mode creates a *module* Web Worker.
+      // Module workers cannot use importScripts() — they fall back to
+      //   self.createFFmpegCore = (await import(coreURL)).default
+      // This requires coreURL to be an ES module with `export default`.
+      //
+      // The UMD build (ffmpeg-core.js) has NO `export default`, so .default
+      // is undefined → ERROR_IMPORT_FAILURE → "failed to import ffmpeg-core.js".
+      //
+      // Fix: use the ESM build (ffmpeg-core-esm.js which has `export default
+      // createFFmpegCore`). The ESM build uses import.meta.url internally, so
+      // it must be served as text/javascript (blob URL is fine for module import).
+      //
+      // Both files are wrapped in toBlobURL so the Replit proxy cannot interfere
+      // with MIME types or CORS headers.
       const [coreURL, wasmURL] = await Promise.all([
-        toBlobURL("/ffmpeg-core.js", "text/javascript"),
+        toBlobURL("/ffmpeg-core-esm.js", "text/javascript"),
         toBlobURL("/ffmpeg-core.wasm", "application/wasm"),
       ]);
       await ffmpeg.load({ coreURL, wasmURL });

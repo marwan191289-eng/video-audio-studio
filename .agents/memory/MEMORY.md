@@ -1,2 +1,2 @@
 - [FFmpeg.wasm setup in Replit](ffmpeg-wasm-replit.md) — @ffmpeg/core must be installed locally + copied to public/; CDN always fails in Replit sandbox.
-- [FFmpeg.wasm root cause fix](ffmpeg-wasm-root-cause.md) — wasmURL MUST be wrapped in toBlobURL("…","application/wasm"); passing a direct URL causes MIME/CORS failures in Replit's proxied iframe.
+- [FFmpeg.wasm root cause fix](ffmpeg-wasm-root-cause.md) — Vite creates a module worker; importScripts fails; must use ESM @ffmpeg/core (has export default) + toBlobURL for both files. UMD core always fails silently.
