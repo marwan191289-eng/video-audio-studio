@@ -1,6 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { listVideos, deleteVideo, getVideoDownloadPath } from "@/lib/api/library.functions";
 import { ArrowRight, Trash2, Download, Library as LibIcon } from "lucide-react";
 
 export const Route = createFileRoute("/library")({
@@ -26,30 +26,23 @@ function LibraryPage() {
 
   const { data, isLoading } = useQuery({
     queryKey: ["library"],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("processed_videos")
-        .select("id,name,storage_path,size_bytes,created_at")
-        .order("created_at", { ascending: false });
-      if (error) throw error;
-      return data as Row[];
-    },
+    queryFn: () => listVideos(),
   });
 
   const del = useMutation({
     mutationFn: async (row: Row) => {
-      await supabase.storage.from("videos").remove([row.storage_path]);
-      await supabase.from("processed_videos").delete().eq("id", row.id);
+      await deleteVideo({ data: { id: row.id, storagePath: row.storage_path } });
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["library"] }),
   });
 
   async function download(row: Row) {
-    const { data, error } = await supabase.storage
-      .from("videos")
-      .createSignedUrl(row.storage_path, 3600);
-    if (error || !data) return alert("تعذّر إنشاء الرابط");
-    window.open(data.signedUrl, "_blank");
+    try {
+      const { url } = await getVideoDownloadPath({ data: { storagePath: row.storage_path } });
+      window.open(url, "_blank");
+    } catch {
+      alert("تعذّر إنشاء الرابط");
+    }
   }
 
   return (

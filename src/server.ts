@@ -1,5 +1,6 @@
 import "./lib/error-capture";
-import { readFileSync } from "fs";
+import { readFileSync, existsSync } from "fs";
+import { readFile } from "fs/promises";
 import { join } from "path";
 import { consumeLastCapturedError } from "./lib/error-capture";
 import { renderErrorPage } from "./lib/error-page";
@@ -102,6 +103,34 @@ export default {
             "Cross-Origin-Resource-Policy": "cross-origin",
           },
         });
+      }
+    }
+
+    // ── Serve uploaded video files ────────────────────────────────────────
+    if (pathname.startsWith("/api/videos/")) {
+      const fileName = decodeURIComponent(pathname.slice("/api/videos/".length));
+      if (fileName && !fileName.includes("..")) {
+        const filePath = join(process.cwd(), "uploads", fileName);
+        if (existsSync(filePath)) {
+          const buf = await readFile(filePath);
+          const ext = fileName.split(".").pop()?.toLowerCase() ?? "";
+          const mime =
+            ext === "mp4" ? "video/mp4" :
+            ext === "webm" ? "video/webm" :
+            ext === "gif" ? "image/gif" :
+            ext === "mp3" ? "audio/mpeg" :
+            ext === "wav" ? "audio/wav" :
+            "application/octet-stream";
+          return new Response(buf, {
+            status: 200,
+            headers: {
+              "Content-Type": mime,
+              "Content-Disposition": `attachment; filename="${fileName.replace(/^[^-]+-/, "")}"`,
+              "Cross-Origin-Resource-Policy": "cross-origin",
+            },
+          });
+        }
+        return new Response("Not found", { status: 404 });
       }
     }
 

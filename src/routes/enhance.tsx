@@ -2,7 +2,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useRef, useState, useCallback } from "react";
 import { fetchFile } from "@ffmpeg/util";
 import { getFFmpeg, removeLogHandler } from "@/lib/ffmpeg-client";
-import { supabase } from "@/integrations/supabase/client";
+import { saveVideo } from "@/lib/api/library.functions";
 import {
   ArrowRight, Upload, Wand2, Download, Save, Loader2, RotateCcw,
   Scissors, Zap, FlipHorizontal, Volume2, VolumeX, Film, RefreshCw,
@@ -213,17 +213,20 @@ function EnhancePage() {
     if (!outputBlob) return;
     setSaving(true);
     try {
-      const id = crypto.randomUUID();
-      const path = `${id}-${outputName}`;
-      const { error: upErr } = await supabase.storage.from("videos").upload(path, outputBlob, {
-        contentType: outputBlob.type,
+      const reader = new FileReader();
+      const fileData: string = await new Promise((resolve, reject) => {
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = reject;
+        reader.readAsDataURL(outputBlob);
       });
-      if (upErr) throw upErr;
-      await supabase.from("processed_videos").insert({
-        name: outputName,
-        storage_path: path,
-        size_bytes: outputBlob.size,
-        settings: { mode },
+      await saveVideo({
+        data: {
+          name: outputName,
+          fileData,
+          mimeType: outputBlob.type,
+          sizeBytes: outputBlob.size,
+          settings: { mode },
+        },
       });
       alert("✓ تم الحفظ في مكتبتك");
     } catch (e) {
