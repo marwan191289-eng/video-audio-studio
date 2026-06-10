@@ -88,7 +88,7 @@ function EnhancePage() {
       await ffmpeg.exec(args);
       const data = (await ffmpeg.readFile(outName)) as Uint8Array;
       const mime = outName.endsWith(".mp3") ? "audio/mpeg" : "video/mp4";
-      const blob = new Blob([data], { type: mime });
+      const blob = new Blob([data.buffer as ArrayBuffer], { type: mime });
       setOutputBlob(blob);
       setOutputName(outName);
       setOutputUrl(URL.createObjectURL(blob));
