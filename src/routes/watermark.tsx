@@ -68,22 +68,27 @@ function WatermarkPage() {
 
       const allRegions = regions.length > 0 ? regions : [{ x: logoX, y: logoY, w: logoW, h: logoH }];
 
-      let vf = "";
-      if (method === "delogo") {
-        vf = allRegions.map(r => `delogo=x=${r.x}:y=${r.y}:w=${r.w}:h=${r.h}`).join(",");
-      } else if (method === "blur") {
-        vf = allRegions
-          .map(r => `[in]split[orig][blur];[blur]crop=${r.w}:${r.h}:${r.x}:${r.y},boxblur=${blurStrength}:${blurStrength}[blurred];[orig][blurred]overlay=${r.x}:${r.y}[out]`)
-          .join(";");
-        // Simplified single-region blur
-        const r = allRegions[0];
-        vf = `boxblur=enable='between(x\\,${r.x}\\,${r.x + r.w})*between(y\\,${r.y}\\,${r.y + r.h})':luma_radius=${blurStrength}:luma_power=2`;
-      } else if (method === "fill") {
-        vf = allRegions.map(r => `drawbox=x=${r.x}:y=${r.y}:w=${r.w}:h=${r.h}:color=black@1:t=fill`).join(",");
-      }
-
       const outName = "output.mp4";
-      const args = ["-i", inputName, "-vf", vf, "-c:a", "copy", "-preset", "ultrafast", outName];
+      let args: string[];
+
+      if (method === "delogo") {
+        const vf = allRegions.map(r => `delogo=x=${r.x}:y=${r.y}:w=${r.w}:h=${r.h}`).join(",");
+        args = ["-i", inputName, "-vf", vf, "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "copy", outName];
+
+      } else if (method === "blur") {
+        // Use filtergraph: crop region → blur → overlay back
+        const r = allRegions[0]; // apply to first region (multiple regions require complex chain)
+        const filterComplex =
+          `[0:v]crop=${r.w}:${r.h}:${r.x}:${r.y},boxblur=${blurStrength}:${blurStrength}[blurred];` +
+          `[0:v][blurred]overlay=${r.x}:${r.y}`;
+        args = ["-i", inputName, "-filter_complex", filterComplex,
+          "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "copy", outName];
+
+      } else {
+        // fill (drawbox)
+        const vf = allRegions.map(r => `drawbox=x=${r.x}:y=${r.y}:w=${r.w}:h=${r.h}:color=black@1:t=fill`).join(",");
+        args = ["-i", inputName, "-vf", vf, "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "copy", outName];
+      }
       await ffmpeg.exec(args);
 
       const data = (await ffmpeg.readFile(outName)) as Uint8Array;

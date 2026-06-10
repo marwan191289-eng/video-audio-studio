@@ -19,26 +19,23 @@ export async function getFFmpeg(onLog?: (msg: string) => void): Promise<FFmpeg> 
     ffmpeg.on("log", globalLogListener);
 
     try {
-      /*
-       * ffmpeg-core.js is a UMD bundle — it can NOT be dynamic-imported directly.
-       * toBlobURL fetches it from same-origin (/public/) and wraps it in a blob://
-       * URL with the correct MIME type so import() works.
-       * wasmURL is passed as a direct same-origin URL (no blob conversion needed).
-       *
-       * Both files live in /public and are served by Vite with COOP/COEP headers,
-       * so SharedArrayBuffer is available.
-       */
-      const coreURL = await toBlobURL("/ffmpeg-core.js", "text/javascript");
-      await ffmpeg.load({
-        coreURL,
-        wasmURL: "/ffmpeg-core.wasm",
-      });
+      // CRITICAL FIX: Both files must be wrapped in toBlobURL with correct MIME types.
+      // Passing a direct URL for wasmURL causes MIME type / CORS failures in proxied
+      // environments (Replit, iframes). toBlobURL fetches → stores in a local blob://
+      // URL → browser accepts it without CORS or MIME checks.
+      const [coreURL, wasmURL] = await Promise.all([
+        toBlobURL("/ffmpeg-core.js", "text/javascript"),
+        toBlobURL("/ffmpeg-core.wasm", "application/wasm"),
+      ]);
+      await ffmpeg.load({ coreURL, wasmURL });
     } catch (err) {
       _loading = null;
       if (onLog) _logHandlers = _logHandlers.filter((h) => h !== onLog);
-      const raw =
-        err instanceof Error ? err.message : typeof err === "string" ? err : "";
-      throw new Error(raw || "فشل تحميل FFmpeg — أعد تحميل الصفحة وحاول مجدداً");
+      const raw = err instanceof Error ? err.message : typeof err === "string" ? err : "";
+      throw new Error(
+        raw ||
+          "فشل تحميل FFmpeg — تأكد من أن المتصفح يدعم WebAssembly وأعد المحاولة",
+      );
     }
 
     _ffmpeg = ffmpeg;
@@ -53,8 +50,17 @@ export function removeLogHandler(onLog: (msg: string) => void) {
 }
 
 export function resetFFmpeg() {
-  try { _ffmpeg?.terminate(); } catch {}
+  try {
+    _ffmpeg?.terminate();
+  } catch {}
   _ffmpeg = null;
   _loading = null;
   _logHandlers = [];
+}
+
+/** Check if the file likely has an audio stream based on extension */
+export function hasAudioByExt(filename: string): boolean {
+  const ext = filename.split(".").pop()?.toLowerCase() ?? "";
+  const noAudio = ["gif", "apng"];
+  return !noAudio.includes(ext);
 }
