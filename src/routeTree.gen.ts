@@ -9,11 +9,19 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as WatermarkRouteImport } from './routes/watermark'
 import { Route as TerminalRouteImport } from './routes/terminal'
 import { Route as LibraryRouteImport } from './routes/library'
+import { Route as FingerprintRouteImport } from './routes/fingerprint'
 import { Route as EnhanceRouteImport } from './routes/enhance'
+import { Route as AudioRouteImport } from './routes/audio'
 import { Route as IndexRouteImport } from './routes/index'
 
+const WatermarkRoute = WatermarkRouteImport.update({
+  id: '/watermark',
+  path: '/watermark',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const TerminalRoute = TerminalRouteImport.update({
   id: '/terminal',
   path: '/terminal',
@@ -24,9 +32,19 @@ const LibraryRoute = LibraryRouteImport.update({
   path: '/library',
   getParentRoute: () => rootRouteImport,
 } as any)
+const FingerprintRoute = FingerprintRouteImport.update({
+  id: '/fingerprint',
+  path: '/fingerprint',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const EnhanceRoute = EnhanceRouteImport.update({
   id: '/enhance',
   path: '/enhance',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AudioRoute = AudioRouteImport.update({
+  id: '/audio',
+  path: '/audio',
   getParentRoute: () => rootRouteImport,
 } as any)
 const IndexRoute = IndexRouteImport.update({
@@ -37,40 +55,81 @@ const IndexRoute = IndexRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/audio': typeof AudioRoute
   '/enhance': typeof EnhanceRoute
+  '/fingerprint': typeof FingerprintRoute
   '/library': typeof LibraryRoute
   '/terminal': typeof TerminalRoute
+  '/watermark': typeof WatermarkRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/audio': typeof AudioRoute
   '/enhance': typeof EnhanceRoute
+  '/fingerprint': typeof FingerprintRoute
   '/library': typeof LibraryRoute
   '/terminal': typeof TerminalRoute
+  '/watermark': typeof WatermarkRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/audio': typeof AudioRoute
   '/enhance': typeof EnhanceRoute
+  '/fingerprint': typeof FingerprintRoute
   '/library': typeof LibraryRoute
   '/terminal': typeof TerminalRoute
+  '/watermark': typeof WatermarkRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/enhance' | '/library' | '/terminal'
+  fullPaths:
+    | '/'
+    | '/audio'
+    | '/enhance'
+    | '/fingerprint'
+    | '/library'
+    | '/terminal'
+    | '/watermark'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/enhance' | '/library' | '/terminal'
-  id: '__root__' | '/' | '/enhance' | '/library' | '/terminal'
+  to:
+    | '/'
+    | '/audio'
+    | '/enhance'
+    | '/fingerprint'
+    | '/library'
+    | '/terminal'
+    | '/watermark'
+  id:
+    | '__root__'
+    | '/'
+    | '/audio'
+    | '/enhance'
+    | '/fingerprint'
+    | '/library'
+    | '/terminal'
+    | '/watermark'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AudioRoute: typeof AudioRoute
   EnhanceRoute: typeof EnhanceRoute
+  FingerprintRoute: typeof FingerprintRoute
   LibraryRoute: typeof LibraryRoute
   TerminalRoute: typeof TerminalRoute
+  WatermarkRoute: typeof WatermarkRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/watermark': {
+      id: '/watermark'
+      path: '/watermark'
+      fullPath: '/watermark'
+      preLoaderRoute: typeof WatermarkRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/terminal': {
       id: '/terminal'
       path: '/terminal'
@@ -85,11 +144,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LibraryRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/fingerprint': {
+      id: '/fingerprint'
+      path: '/fingerprint'
+      fullPath: '/fingerprint'
+      preLoaderRoute: typeof FingerprintRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/enhance': {
       id: '/enhance'
       path: '/enhance'
       fullPath: '/enhance'
       preLoaderRoute: typeof EnhanceRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/audio': {
+      id: '/audio'
+      path: '/audio'
+      fullPath: '/audio'
+      preLoaderRoute: typeof AudioRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/': {
@@ -104,9 +177,12 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AudioRoute: AudioRoute,
   EnhanceRoute: EnhanceRoute,
+  FingerprintRoute: FingerprintRoute,
   LibraryRoute: LibraryRoute,
   TerminalRoute: TerminalRoute,
+  WatermarkRoute: WatermarkRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
