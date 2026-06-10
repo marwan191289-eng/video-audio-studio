@@ -11,7 +11,6 @@ function globalLogListener({ message }: { message: string }) {
 
 export async function getFFmpeg(onLog?: (msg: string) => void): Promise<FFmpeg> {
   if (onLog) _logHandlers.push(onLog);
-
   if (_ffmpeg) return _ffmpeg;
   if (_loading) return _loading;
 
@@ -19,22 +18,27 @@ export async function getFFmpeg(onLog?: (msg: string) => void): Promise<FFmpeg> 
     const ffmpeg = new FFmpeg();
     ffmpeg.on("log", globalLogListener);
 
-    const baseURL = "https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd";
     try {
+      /*
+       * ffmpeg-core.js is a UMD bundle — it can NOT be dynamic-imported directly.
+       * toBlobURL fetches it from same-origin (/public/) and wraps it in a blob://
+       * URL with the correct MIME type so import() works.
+       * wasmURL is passed as a direct same-origin URL (no blob conversion needed).
+       *
+       * Both files live in /public and are served by Vite with COOP/COEP headers,
+       * so SharedArrayBuffer is available.
+       */
+      const coreURL = await toBlobURL("/ffmpeg-core.js", "text/javascript");
       await ffmpeg.load({
-        coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, "text/javascript"),
-        wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, "application/wasm"),
+        coreURL,
+        wasmURL: "/ffmpeg-core.wasm",
       });
     } catch (err) {
       _loading = null;
-      _logHandlers = _logHandlers.filter((h) => h !== onLog);
-      const msg =
-        err instanceof Error
-          ? err.message
-          : typeof err === "string"
-            ? err
-            : "فشل تحميل FFmpeg — تأكد من اتصالك بالإنترنت";
-      throw new Error(msg);
+      if (onLog) _logHandlers = _logHandlers.filter((h) => h !== onLog);
+      const raw =
+        err instanceof Error ? err.message : typeof err === "string" ? err : "";
+      throw new Error(raw || "فشل تحميل FFmpeg — أعد تحميل الصفحة وحاول مجدداً");
     }
 
     _ffmpeg = ffmpeg;
@@ -49,9 +53,7 @@ export function removeLogHandler(onLog: (msg: string) => void) {
 }
 
 export function resetFFmpeg() {
-  try {
-    _ffmpeg?.terminate();
-  } catch {}
+  try { _ffmpeg?.terminate(); } catch {}
   _ffmpeg = null;
   _loading = null;
   _logHandlers = [];

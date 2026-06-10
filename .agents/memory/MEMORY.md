@@ -1,0 +1,1 @@
+- [FFmpeg.wasm setup in Replit](ffmpeg-wasm-replit.md) — @ffmpeg/core must be installed locally + copied to public/; CDN always fails in Replit sandbox.
