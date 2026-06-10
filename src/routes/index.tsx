@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { Link } from "@tanstack/react-router";
-import { Sparkles, Wand2, Library, Volume2, Eraser } from "lucide-react";
+import { Sparkles, Wand2, Library, Volume2, Eraser, Terminal } from "lucide-react";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -31,6 +31,7 @@ function Index() {
         </div>
         <nav className="flex items-center gap-4 text-sm">
           <Link to="/enhance" className="hover:text-primary transition">المحرر</Link>
+          <Link to="/terminal" className="hover:text-primary transition">تيرمنال</Link>
           <Link to="/library" className="hover:text-primary transition">مكتبتي</Link>
         </nav>
       </header>
@@ -57,6 +58,13 @@ function Index() {
             >
               <Wand2 className="size-5" />
               ابدأ التحسين الآن
+            </Link>
+            <Link
+              to="/terminal"
+              className="inline-flex items-center gap-2 rounded-lg border border-border bg-card px-6 py-3 font-semibold hover:bg-secondary transition"
+            >
+              <Terminal className="size-5" />
+              التيرمنال
             </Link>
             <Link
               to="/library"
