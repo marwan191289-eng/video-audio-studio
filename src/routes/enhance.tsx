@@ -523,7 +523,10 @@ function EnhancePage() {
           </div>
           محرر الفيديو
         </div>
-        <Link to="/library" className="text-sm text-muted-foreground hover:text-primary transition">مكتبتي</Link>
+        <div className="flex items-center gap-3">
+          <Link to="/batch" className="text-sm text-muted-foreground hover:text-violet-400 transition">دفعي</Link>
+          <Link to="/library" className="text-sm text-muted-foreground hover:text-primary transition">مكتبتي</Link>
+        </div>
       </header>
 
       <main className="mx-auto max-w-7xl px-4 py-5 grid gap-5 lg:grid-cols-[1fr_360px] xl:grid-cols-[1fr_400px]">

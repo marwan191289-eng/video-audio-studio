@@ -2,7 +2,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import {
   Sparkles, Wand2, Library, Volume2, Eraser, Terminal,
   Fingerprint, Droplets, Music, Scissors, Zap, Shield,
-  ChevronRight, Star, Globe, Lock, Cpu,
+  ChevronRight, Star, Globe, Lock, Cpu, Layers,
 } from "lucide-react";
 
 export const Route = createFileRoute("/")({
@@ -55,6 +55,14 @@ const features = [
     href: "/terminal",
     gradient: "from-sky-500 to-blue-600",
     badge: "50+ سكربت",
+  },
+  {
+    icon: Layers,
+    title: "معالجة دفعية",
+    desc: "ارفع عشرات الفيديوهات ومرّر عليها نفس العملية — تحسين، ضغط، تحويل، استخراج صوت — ثم حمّل الكل كـ ZIP.",
+    href: "/batch",
+    gradient: "from-violet-500 to-indigo-600",
+    badge: "جديد",
   },
   {
     icon: Library,
