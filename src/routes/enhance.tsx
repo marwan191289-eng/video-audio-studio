@@ -70,8 +70,35 @@ const TEXT_POSITIONS = [
   { id: "bottom-left",   label: "أسفل يسار",    x: "20",           y: "h*0.88" },
 ];
 
+type VideoMeta = {
+  duration: number;
+  width: number;
+  height: number;
+  bitrate: number;
+  container: string;
+};
+
+function fmtDuration(s: number) {
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = Math.floor(s % 60);
+  if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
+  return `${m}:${String(sec).padStart(2, "0")}`;
+}
+
+function containerLabel(filename: string) {
+  const ext = filename.split(".").pop()?.toLowerCase() ?? "";
+  const map: Record<string, string> = {
+    mp4: "MP4", mov: "MOV", avi: "AVI", mkv: "MKV",
+    webm: "WebM", flv: "FLV", wmv: "WMV", m4v: "M4V",
+    ts: "MPEG-TS", ogv: "OGV",
+  };
+  return map[ext] ?? ext.toUpperCase();
+}
+
 function EnhancePage() {
   const [file, setFile] = useState<File | null>(null);
+  const [meta, setMeta] = useState<VideoMeta | null>(null);
   const [extraFiles, setExtraFiles] = useState<File[]>([]);
   const [logoFile, setLogoFile] = useState<File | null>(null);
   const [outputUrl, setOutputUrl] = useState<string | null>(null);
@@ -86,6 +113,28 @@ function EnhancePage() {
   const [showLog, setShowLog] = useState(false);
   const [toast, setToast] = useState<{ msg: string; type: "ok" | "err" } | null>(null);
   const [dragOver, setDragOver] = useState(false);
+
+  useEffect(() => {
+    if (!file) { setMeta(null); return; }
+    const url = URL.createObjectURL(file);
+    const vid = document.createElement("video");
+    vid.preload = "metadata";
+    vid.src = url;
+    vid.onloadedmetadata = () => {
+      const dur = vid.duration;
+      const bitrate = dur > 0 ? Math.round((file.size * 8) / dur / 1000) : 0;
+      setMeta({
+        duration: dur,
+        width: vid.videoWidth,
+        height: vid.videoHeight,
+        bitrate,
+        container: containerLabel(file.name),
+      });
+      URL.revokeObjectURL(url);
+    };
+    vid.onerror = () => { URL.revokeObjectURL(url); };
+    return () => { URL.revokeObjectURL(url); };
+  }, [file]);
 
   // Enhance
   const [brightness, setBrightness] = useState(0);
@@ -495,6 +544,38 @@ function EnhancePage() {
                 <button onClick={() => { setFile(null); setOutputUrl(null); setOutputBlob(null); }} className="text-destructive hover:underline text-xs">
                   <X className="size-3.5" />
                 </button>
+              </div>
+            </div>
+          )}
+
+          {/* Video Metadata Card */}
+          {meta && !outputUrl && (
+            <div className="rounded-xl border border-border bg-card/40 px-4 py-3 grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className="flex flex-col gap-0.5">
+                <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">المدة</span>
+                <span className="text-sm font-mono font-bold text-foreground tabular-nums">
+                  {isFinite(meta.duration) ? fmtDuration(meta.duration) : "—"}
+                </span>
+              </div>
+              <div className="flex flex-col gap-0.5">
+                <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">الدقة</span>
+                <span className="text-sm font-mono font-bold text-foreground tabular-nums">
+                  {meta.width && meta.height ? `${meta.width}×${meta.height}` : "—"}
+                </span>
+              </div>
+              <div className="flex flex-col gap-0.5">
+                <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">البيت-ريت</span>
+                <span className="text-sm font-mono font-bold text-foreground tabular-nums">
+                  {meta.bitrate > 0
+                    ? meta.bitrate >= 1000
+                      ? `${(meta.bitrate / 1000).toFixed(1)} Mbps`
+                      : `${meta.bitrate} kbps`
+                    : "—"}
+                </span>
+              </div>
+              <div className="flex flex-col gap-0.5">
+                <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">الصيغة</span>
+                <span className="text-sm font-mono font-bold text-violet-400">{meta.container}</span>
               </div>
             </div>
           )}
