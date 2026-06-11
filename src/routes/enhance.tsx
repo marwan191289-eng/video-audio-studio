@@ -7,7 +7,7 @@ import {
   ArrowRight, Upload, Wand2, Download, Save, Loader2, RotateCcw,
   Scissors, Zap, Volume2, VolumeX, Film, RefreshCw, Type, Palette,
   Layers, Merge, Image, Play, ChevronRight, CheckCircle2, AlertCircle,
-  Settings2, Sparkles, X,
+  Settings2, Sparkles, X, Star, Check,
 } from "lucide-react";
 
 export const Route = createFileRoute("/enhance")({
@@ -21,12 +21,13 @@ export const Route = createFileRoute("/enhance")({
 });
 
 type Mode =
-  | "enhance" | "denoise" | "speed" | "trim" | "crop" | "rotate"
+  | "auto-enhance" | "enhance" | "denoise" | "speed" | "trim" | "crop" | "rotate"
   | "reverse" | "extract-audio" | "remove-audio" | "compress"
   | "upscale" | "fps" | "gif" | "thumbnail" | "text-overlay"
   | "color-grade" | "logo-overlay" | "concat" | "stabilize";
 
 const MODES: { value: Mode; label: string; icon: React.ElementType; color: string; group: string }[] = [
+  { value: "auto-enhance",  label: "تحسين تلقائي ✦",    icon: Star,      color: "amber",   group: "أساسي" },
   { value: "enhance",       label: "تحسين الجودة",       icon: Wand2,     color: "violet",  group: "أساسي" },
   { value: "color-grade",   label: "تصحيح الألوان",      icon: Palette,   color: "pink",    group: "أساسي" },
   { value: "text-overlay",  label: "نص على الفيديو",     icon: Type,      color: "sky",     group: "أساسي" },
@@ -114,6 +115,9 @@ function EnhancePage() {
   const [toast, setToast] = useState<{ msg: string; type: "ok" | "err" } | null>(null);
   const [dragOver, setDragOver] = useState(false);
 
+  // Auto-enhance
+  const [autoLevel, setAutoLevel] = useState<"light" | "balanced" | "strong">("balanced");
+
   useEffect(() => {
     if (!file) { setMeta(null); return; }
     const url = URL.createObjectURL(file);
@@ -130,6 +134,7 @@ function EnhancePage() {
         bitrate,
         container: containerLabel(file.name),
       });
+      if (isFinite(dur) && dur > 0) setTrimEnd(Math.floor(dur));
       URL.revokeObjectURL(url);
     };
     vid.onerror = () => { URL.revokeObjectURL(url); };
@@ -414,6 +419,40 @@ function EnhancePage() {
         args = ["-i", inputName, "-vf", `vidstabtransform=input=${detOut}:zoom=1:smoothing=30,unsharp=5:5:0.8`,
           ...(hasAudio ? ["-c:a", "copy"] : []),
           "-c:v", "libx264", "-preset", "ultrafast", outName];
+
+      } else if (mode === "auto-enhance") {
+        const vf: string[] = [];
+        const needsUpscale = meta && meta.height > 0 && meta.height < (autoLevel === "strong" ? 1080 : 720);
+
+        if (autoLevel === "light") {
+          vf.push("hqdn3d=2:1:3:2.5");
+          vf.push("eq=brightness=0.02:contrast=1.05:saturation=1.15:gamma=0.97");
+          vf.push("unsharp=3:3:0.3");
+        } else if (autoLevel === "balanced") {
+          vf.push("hqdn3d=3:2:4:3.5");
+          vf.push("eq=brightness=0.03:contrast=1.1:saturation=1.25:gamma=0.95");
+          vf.push("unsharp=5:5:0.5");
+          if (needsUpscale) vf.push("scale=1280:720:flags=lanczos");
+        } else {
+          vf.push("hqdn3d=4:3:6:4.5");
+          vf.push("eq=brightness=0.05:contrast=1.15:saturation=1.4:gamma=0.92");
+          vf.push("unsharp=5:5:0.8");
+          if (needsUpscale) vf.push("scale=1920:1080:flags=lanczos");
+        }
+
+        const audioArgs: string[] = hasAudio
+          ? autoLevel === "strong"
+            ? ["-af", "loudnorm=I=-16:TP=-1.5:LRA=11", "-c:a", "aac", "-b:a", "192k"]
+            : ["-af", "loudnorm=I=-18:TP=-1.5:LRA=11", "-c:a", "aac", "-b:a", "128k"]
+          : [];
+
+        args = [
+          "-i", inputName,
+          "-vf", vf.join(","),
+          ...audioArgs,
+          "-c:v", "libx264", "-crf", autoLevel === "strong" ? "18" : autoLevel === "balanced" ? "20" : "22",
+          "-preset", "ultrafast", outName,
+        ];
       }
 
       await ffmpeg.exec(args);
@@ -667,6 +706,8 @@ function EnhancePage() {
           {/* Mode-specific settings */}
           <ModeSettings
             mode={mode}
+            file={file} meta={meta}
+            autoLevel={autoLevel} setAutoLevel={setAutoLevel}
             brightness={brightness} setBrightness={setBrightness}
             contrast={contrast} setContrast={setContrast}
             saturation={saturation} setSaturation={setSaturation}
@@ -888,11 +929,24 @@ function ModeSettings(p: any) {
   if (p.mode === "trim") return (
     <Card>
       <Title>قص مقطع</Title>
-      <div className="grid grid-cols-2 gap-2">
-        <NumInput label="من (ثانية)" value={p.trimStart} onChange={p.setTrimStart} />
-        <NumInput label="إلى (ثانية)" value={p.trimEnd} onChange={p.setTrimEnd} />
-      </div>
-      <p className="text-[11px] text-muted-foreground">المدة: {Math.max(0, p.trimEnd - p.trimStart).toFixed(1)} ثانية</p>
+      {p.file && p.meta?.duration ? (
+        <WaveformTrimmer
+          file={p.file}
+          duration={p.meta.duration}
+          trimStart={p.trimStart}
+          trimEnd={p.trimEnd}
+          setTrimStart={p.setTrimStart}
+          setTrimEnd={p.setTrimEnd}
+        />
+      ) : (
+        <div className="space-y-2">
+          <div className="grid grid-cols-2 gap-2">
+            <NumInput label="من (ثانية)" value={p.trimStart} onChange={p.setTrimStart} />
+            <NumInput label="إلى (ثانية)" value={p.trimEnd} onChange={p.setTrimEnd} />
+          </div>
+          <p className="text-[11px] text-muted-foreground">المدة: {Math.max(0, p.trimEnd - p.trimStart).toFixed(1)} ثانية</p>
+        </div>
+      )}
     </Card>
   );
 
@@ -1031,6 +1085,54 @@ function ModeSettings(p: any) {
     </Card>
   );
 
+  if (p.mode === "auto-enhance") {
+    const h = p.meta?.height ?? 0;
+    const willUpscale = h > 0 && h < (p.autoLevel === "strong" ? 1080 : 720);
+    const ops: { label: string; detail: string; active: boolean }[] = [
+      { label: "إزالة التشويش",  detail: p.autoLevel === "strong" ? "hqdn3d قوي" : "hqdn3d متوسط", active: true },
+      { label: "تحسين الألوان",  detail: p.autoLevel === "light" ? "دفء خفيف" : p.autoLevel === "balanced" ? "تباين + تشبع" : "ألوان قوية", active: true },
+      { label: "زيادة الحدّة",   detail: p.autoLevel === "light" ? "خفيف 0.3" : p.autoLevel === "balanced" ? "متوسط 0.5" : "قوي 0.8", active: true },
+      { label: "ترقية الدقة",    detail: p.autoLevel === "balanced" ? "→ 720p" : "→ 1080p", active: willUpscale },
+      { label: "تطبيع الصوت",   detail: "loudnorm EBU R128", active: p.autoLevel !== "light" },
+    ];
+    return (
+      <Card>
+        <div className="flex items-center gap-2 mb-1">
+          <Star className="size-4 text-amber-400" />
+          <Title>التحسين التلقائي الذكي</Title>
+        </div>
+        <div className="grid grid-cols-3 gap-1.5 mb-3">
+          {(["light","balanced","strong"] as const).map((lv) => (
+            <button key={lv} onClick={() => p.setAutoLevel(lv)}
+              className={`rounded-lg py-2 text-xs font-semibold transition ${p.autoLevel === lv ? "bg-amber-500 text-white" : "bg-background border border-border hover:bg-secondary text-muted-foreground"}`}>
+              {lv === "light" ? "خفيف" : lv === "balanced" ? "متوازن ✦" : "قوي"}
+            </button>
+          ))}
+        </div>
+        <div className="space-y-1.5">
+          {ops.map((op) => (
+            <div key={op.label} className={`flex items-center justify-between rounded-lg px-3 py-2 text-xs transition ${op.active ? "bg-amber-500/10 border border-amber-500/20" : "bg-background/40 border border-border opacity-40"}`}>
+              <div className="flex items-center gap-2">
+                <div className={`size-4 rounded-full flex items-center justify-center ${op.active ? "bg-amber-500" : "bg-muted"}`}>
+                  {op.active && <Check className="size-2.5 text-white" strokeWidth={3} />}
+                </div>
+                <span className={op.active ? "text-foreground font-medium" : "text-muted-foreground"}>{op.label}</span>
+              </div>
+              <span className="text-muted-foreground font-mono text-[10px]">{op.detail}</span>
+            </div>
+          ))}
+        </div>
+        {p.meta && (
+          <p className="text-[11px] text-muted-foreground mt-2">
+            الفيديو: {p.meta.width}×{p.meta.height} · {(p.meta.bitrate / 1000).toFixed(1)} Mbps
+            {willUpscale ? " · سيتم ترقية الدقة تلقائياً" : ""}
+          </p>
+        )}
+        {!p.meta && <p className="text-[11px] text-amber-400/80 mt-1">ارفع فيديو لرؤية التحسينات المقترحة</p>}
+      </Card>
+    );
+  }
+
   return null;
 }
 
@@ -1071,5 +1173,139 @@ function QuickReset({ onReset }: { onReset: () => void }) {
     <button onClick={onReset} className="text-[11px] text-muted-foreground hover:text-foreground flex items-center gap-1 transition">
       <RefreshCw className="size-3" /> إعادة تعيين
     </button>
+  );
+}
+
+function WaveformTrimmer({
+  file, duration, trimStart, trimEnd, setTrimStart, setTrimEnd,
+}: {
+  file: File; duration: number;
+  trimStart: number; trimEnd: number;
+  setTrimStart: (v: number) => void; setTrimEnd: (v: number) => void;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [bars, setBars] = useState<Float32Array | null>(null);
+  const [dragging, setDragging] = useState<"start" | "end" | null>(null);
+  const BAR_COUNT = 300;
+
+  useEffect(() => {
+    let cancelled = false;
+    const ctx = new AudioContext();
+    file.arrayBuffer()
+      .then((buf) => ctx.decodeAudioData(buf))
+      .then((decoded) => {
+        if (cancelled) return;
+        const ch = decoded.getChannelData(0);
+        const blockSize = Math.max(1, Math.floor(ch.length / BAR_COUNT));
+        const out = new Float32Array(BAR_COUNT);
+        for (let i = 0; i < BAR_COUNT; i++) {
+          let mx = 0;
+          for (let j = 0; j < blockSize; j++) mx = Math.max(mx, Math.abs(ch[i * blockSize + j] ?? 0));
+          out[i] = mx;
+        }
+        setBars(out);
+      })
+      .catch(() => {})
+      .finally(() => ctx.close());
+    return () => { cancelled = true; };
+  }, [file]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !bars) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    const { width, height } = canvas;
+    ctx.clearRect(0, 0, width, height);
+    const midY = height / 2;
+    const barW = width / BAR_COUNT;
+    for (let i = 0; i < BAR_COUNT; i++) {
+      const pct = i / BAR_COUNT;
+      const inSel = pct >= trimStart / duration && pct <= trimEnd / duration;
+      const h = Math.max(1, (bars[i] ?? 0) * midY * 0.92);
+      ctx.fillStyle = inSel ? "#a78bfa" : "#374151";
+      ctx.fillRect(i * barW, midY - h, Math.max(1, barW - 0.8), h * 2);
+    }
+  }, [bars, trimStart, trimEnd, duration]);
+
+  function clientToTime(clientX: number) {
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return 0;
+    return Math.max(0, Math.min(duration, ((clientX - rect.left) / rect.width) * duration));
+  }
+
+  function onPointerMove(e: React.PointerEvent) {
+    if (!dragging) return;
+    const t = clientToTime(e.clientX);
+    if (dragging === "start") setTrimStart(parseFloat(Math.min(t, trimEnd - 0.1).toFixed(2)));
+    else setTrimEnd(parseFloat(Math.max(t, trimStart + 0.1).toFixed(2)));
+  }
+
+  const startPct = (trimStart / duration) * 100;
+  const endPct   = (trimEnd   / duration) * 100;
+
+  return (
+    <div className="space-y-2.5">
+      <div
+        ref={containerRef}
+        className="relative h-16 rounded-xl overflow-hidden bg-black/30 border border-border cursor-col-resize select-none"
+        onPointerMove={onPointerMove}
+        onPointerUp={() => setDragging(null)}
+        onPointerLeave={() => setDragging(null)}
+      >
+        <canvas ref={canvasRef} width={600} height={64} className="w-full h-full block" />
+
+        {!bars && (
+          <div className="absolute inset-0 flex items-center justify-center gap-1.5 text-[11px] text-muted-foreground">
+            <Loader2 className="size-3.5 animate-spin" /> تحليل الصوت...
+          </div>
+        )}
+
+        {/* Dark overlay outside selection */}
+        <div className="absolute inset-0 pointer-events-none">
+          <div className="absolute inset-y-0 left-0 bg-black/55" style={{ width: `${startPct}%` }} />
+          <div className="absolute inset-y-0 right-0 bg-black/55" style={{ width: `${100 - endPct}%` }} />
+          <div className="absolute inset-y-0 border-2 border-violet-400/70 rounded"
+            style={{ left: `${startPct}%`, right: `${100 - endPct}%` }} />
+        </div>
+
+        {/* Start handle */}
+        <div
+          className="absolute inset-y-0 w-3 bg-violet-500 hover:bg-violet-400 cursor-ew-resize flex items-center justify-center touch-none z-10"
+          style={{ left: `${startPct}%`, transform: "translateX(-50%)" }}
+          onPointerDown={(e) => { e.preventDefault(); e.currentTarget.setPointerCapture(e.pointerId); setDragging("start"); }}
+        >
+          <div className="w-0.5 h-5 bg-white/80 rounded-full" />
+        </div>
+
+        {/* End handle */}
+        <div
+          className="absolute inset-y-0 w-3 bg-violet-500 hover:bg-violet-400 cursor-ew-resize flex items-center justify-center touch-none z-10"
+          style={{ left: `${endPct}%`, transform: "translateX(-50%)" }}
+          onPointerDown={(e) => { e.preventDefault(); e.currentTarget.setPointerCapture(e.pointerId); setDragging("end"); }}
+        >
+          <div className="w-0.5 h-5 bg-white/80 rounded-full" />
+        </div>
+
+        {/* Time labels */}
+        <div className="absolute bottom-0.5 left-1 text-[9px] text-white/60 font-mono pointer-events-none">
+          {fmtDuration(trimStart)}
+        </div>
+        <div className="absolute bottom-0.5 right-1 text-[9px] text-white/60 font-mono pointer-events-none">
+          {fmtDuration(trimEnd)}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        <NumInput label="من (ثانية)" value={trimStart} onChange={(v) => setTrimStart(Math.max(0, Math.min(v, trimEnd - 0.1)))} />
+        <NumInput label="إلى (ثانية)" value={trimEnd}   onChange={(v) => setTrimEnd(Math.min(duration, Math.max(v, trimStart + 0.1)))} />
+      </div>
+
+      <p className="text-[11px] text-muted-foreground">
+        المحدد: <span className="text-violet-400 font-semibold">{fmtDuration(trimEnd - trimStart)}</span>
+        {" "}من أصل {fmtDuration(duration)} · اسحب المقابض البنفسجية
+      </p>
+    </div>
   );
 }
