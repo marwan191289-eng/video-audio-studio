@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as WatermarkRouteImport } from './routes/watermark'
+import { Route as TransformRouteImport } from './routes/transform'
 import { Route as TerminalRouteImport } from './routes/terminal'
 import { Route as LibraryRouteImport } from './routes/library'
 import { Route as FingerprintRouteImport } from './routes/fingerprint'
@@ -21,6 +22,11 @@ import { Route as IndexRouteImport } from './routes/index'
 const WatermarkRoute = WatermarkRouteImport.update({
   id: '/watermark',
   path: '/watermark',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const TransformRoute = TransformRouteImport.update({
+  id: '/transform',
+  path: '/transform',
   getParentRoute: () => rootRouteImport,
 } as any)
 const TerminalRoute = TerminalRouteImport.update({
@@ -67,6 +73,7 @@ export interface FileRoutesByFullPath {
   '/fingerprint': typeof FingerprintRoute
   '/library': typeof LibraryRoute
   '/terminal': typeof TerminalRoute
+  '/transform': typeof TransformRoute
   '/watermark': typeof WatermarkRoute
 }
 export interface FileRoutesByTo {
@@ -77,6 +84,7 @@ export interface FileRoutesByTo {
   '/fingerprint': typeof FingerprintRoute
   '/library': typeof LibraryRoute
   '/terminal': typeof TerminalRoute
+  '/transform': typeof TransformRoute
   '/watermark': typeof WatermarkRoute
 }
 export interface FileRoutesById {
@@ -88,6 +96,7 @@ export interface FileRoutesById {
   '/fingerprint': typeof FingerprintRoute
   '/library': typeof LibraryRoute
   '/terminal': typeof TerminalRoute
+  '/transform': typeof TransformRoute
   '/watermark': typeof WatermarkRoute
 }
 export interface FileRouteTypes {
@@ -100,6 +109,7 @@ export interface FileRouteTypes {
     | '/fingerprint'
     | '/library'
     | '/terminal'
+    | '/transform'
     | '/watermark'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -110,6 +120,7 @@ export interface FileRouteTypes {
     | '/fingerprint'
     | '/library'
     | '/terminal'
+    | '/transform'
     | '/watermark'
   id:
     | '__root__'
@@ -120,6 +131,7 @@ export interface FileRouteTypes {
     | '/fingerprint'
     | '/library'
     | '/terminal'
+    | '/transform'
     | '/watermark'
   fileRoutesById: FileRoutesById
 }
@@ -131,6 +143,7 @@ export interface RootRouteChildren {
   FingerprintRoute: typeof FingerprintRoute
   LibraryRoute: typeof LibraryRoute
   TerminalRoute: typeof TerminalRoute
+  TransformRoute: typeof TransformRoute
   WatermarkRoute: typeof WatermarkRoute
 }
 
@@ -141,6 +154,13 @@ declare module '@tanstack/react-router' {
       path: '/watermark'
       fullPath: '/watermark'
       preLoaderRoute: typeof WatermarkRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/transform': {
+      id: '/transform'
+      path: '/transform'
+      fullPath: '/transform'
+      preLoaderRoute: typeof TransformRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/terminal': {
@@ -203,6 +223,7 @@ const rootRouteChildren: RootRouteChildren = {
   FingerprintRoute: FingerprintRoute,
   LibraryRoute: LibraryRoute,
   TerminalRoute: TerminalRoute,
+  TransformRoute: TransformRoute,
   WatermarkRoute: WatermarkRoute,
 }
 export const routeTree = rootRouteImport

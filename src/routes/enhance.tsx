@@ -524,6 +524,7 @@ function EnhancePage() {
           محرر الفيديو
         </div>
         <div className="flex items-center gap-3">
+          <Link to="/transform" className="text-sm text-muted-foreground hover:text-fuchsia-400 transition">تحويل</Link>
           <Link to="/batch" className="text-sm text-muted-foreground hover:text-violet-400 transition">دفعي</Link>
           <Link to="/library" className="text-sm text-muted-foreground hover:text-primary transition">مكتبتي</Link>
         </div>

@@ -2,7 +2,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import {
   Sparkles, Wand2, Library, Volume2, Eraser, Terminal,
   Fingerprint, Droplets, Music, Scissors, Zap, Shield,
-  ChevronRight, Star, Globe, Lock, Cpu, Layers,
+  ChevronRight, Star, Globe, Lock, Cpu, Layers, Blend,
 } from "lucide-react";
 
 export const Route = createFileRoute("/")({
@@ -31,6 +31,14 @@ const features = [
     href: "/audio",
     gradient: "from-emerald-500 to-teal-600",
     badge: "16+ أداة",
+  },
+  {
+    icon: Blend,
+    title: "تحويل احترافي",
+    desc: "تغيير الصوت 8 أصوات، استبدال الخلفية (كروما)، تمويه الوجه والعناصر، وتأثيرات بصرية سينمائية.",
+    href: "/transform",
+    gradient: "from-fuchsia-500 to-violet-600",
+    badge: "4 أدوات",
   },
   {
     icon: Droplets,
