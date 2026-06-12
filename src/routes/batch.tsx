@@ -36,6 +36,9 @@ type BatchFile = {
   file: File;
   status: FileStatus;
   progress: number;
+  startedAt: number | null;
+  speedMBps: number | null;
+  etaSec: number | null;
   outputUrl: string | null;
   outputName: string | null;
   outputBlob: Blob | null;
@@ -104,6 +107,7 @@ function BatchPage() {
     const videos = incoming.filter(f => f.type.startsWith("video/") || /\.(mp4|mov|avi|mkv|webm|flv|m4v)$/i.test(f.name));
     const newEntries: BatchFile[] = videos.map(f => ({
       id: uid(), file: f, status: "pending", progress: 0,
+      startedAt: null, speedMBps: null, etaSec: null,
       outputUrl: null, outputName: null, outputBlob: null, error: null,
     }));
     setFiles(prev => [...prev, ...newEntries]);
@@ -131,16 +135,30 @@ function BatchPage() {
     for (const entry of pending) {
       if (abortRef.current) break;
 
-      updateFile(entry.id, { status: "processing", progress: 0, error: null });
+      const processingStartedAt = Date.now();
+      updateFile(entry.id, {
+        status: "processing", progress: 0, error: null,
+        startedAt: processingStartedAt, speedMBps: null, etaSec: null,
+      });
 
       const logLines: string[] = [];
       const logHandler = (m: string) => logLines.push(m);
 
       try {
         const ffmpeg = await getFFmpeg(logHandler);
+        const fileSizeMB = entry.file.size / 1024 / 1024;
 
         ffmpeg.on("progress", ({ progress: p }) => {
-          updateFile(entry.id, { progress: Math.round(Math.max(0, Math.min(100, p * 100))) });
+          const pct = Math.round(Math.max(0, Math.min(100, p * 100)));
+          const elapsedSec = (Date.now() - processingStartedAt) / 1000;
+          let speedMBps: number | null = null;
+          let etaSec: number | null = null;
+          if (elapsedSec > 0.5 && pct > 1) {
+            speedMBps = parseFloat(((fileSizeMB * pct / 100) / elapsedSec).toFixed(2));
+            const remaining = fileSizeMB * (1 - pct / 100);
+            etaSec = speedMBps > 0 ? Math.round(remaining / speedMBps) : null;
+          }
+          updateFile(entry.id, { progress: pct, speedMBps, etaSec });
         });
 
         const ext = entry.file.name.split(".").pop()?.toLowerCase() || "mp4";
@@ -563,12 +581,28 @@ function FileCard({ entry, onRemove }: { entry: BatchFile; onRemove: () => void 
 
           {/* Progress bar */}
           {entry.status === "processing" && (
-            <div className="mt-2 space-y-1">
+            <div className="mt-2 space-y-1.5">
               <div className="h-1.5 bg-muted rounded-full overflow-hidden">
                 <div className="h-full bg-gradient-to-r from-violet-500 to-purple-400 rounded-full transition-all duration-300"
                   style={{ width: `${Math.max(4, entry.progress)}%` }} />
               </div>
-              <p className="text-[10px] text-violet-400 font-mono">{entry.progress}%</p>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[10px] text-violet-400 font-mono font-bold">{entry.progress}%</span>
+                <div className="flex items-center gap-2">
+                  {entry.speedMBps !== null && (
+                    <span className="text-[10px] text-muted-foreground font-mono">
+                      {entry.speedMBps} MB/s
+                    </span>
+                  )}
+                  {entry.etaSec !== null && entry.etaSec > 0 && (
+                    <span className="text-[10px] text-amber-400/80 font-mono">
+                      {entry.etaSec < 60
+                        ? `${entry.etaSec}ث`
+                        : `${Math.floor(entry.etaSec / 60)}د ${entry.etaSec % 60}ث`}
+                    </span>
+                  )}
+                </div>
+              </div>
             </div>
           )}
 
