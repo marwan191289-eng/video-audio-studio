@@ -1,13 +1,17 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useRef, useState, useCallback } from "react";
+import { useRef, useState, useEffect } from "react";
 import { fetchFile } from "@ffmpeg/util";
 import { getFFmpeg, removeLogHandler, hasAudioByExt } from "@/lib/ffmpeg-client";
 import JSZip from "jszip";
 import {
+  saveSession, loadSessions, getBlob, removeSession,
+  clearAllHistory, type HistorySession,
+} from "@/lib/history-db";
+import {
   ArrowRight, Upload, Download, Loader2, Layers, CheckCircle2,
   AlertCircle, X, Play, RefreshCw, Star, Palette, Film,
-  Volume2, VolumeX, Scissors, Zap, Sparkles, Package,
-  ChevronDown, ChevronUp,
+  Volume2, VolumeX, Zap, Sparkles, Package,
+  ChevronDown, ChevronUp, History, Trash2, Clock,
 } from "lucide-react";
 
 export const Route = createFileRoute("/batch")({
@@ -68,6 +72,16 @@ function BatchPage() {
   const [dragOver, setDragOver] = useState(false);
   const [showSettings, setShowSettings] = useState(true);
   const [toast, setToast] = useState<{ msg: string; type: "ok" | "err" } | null>(null);
+  const [history, setHistory] = useState<HistorySession[]>([]);
+  const [showHistory, setShowHistory] = useState(false);
+
+  useEffect(() => {
+    loadSessions().then(setHistory).catch(() => {});
+  }, []);
+
+  async function refreshHistory() {
+    try { setHistory(await loadSessions()); } catch { /* ignore */ }
+  }
 
   // Settings
   const [autoLevel, setAutoLevel] = useState<"light" | "balanced" | "strong">("balanced");
@@ -109,6 +123,10 @@ function BatchPage() {
     if (!pending.length) return;
     setRunning(true);
     abortRef.current = false;
+
+    const sessionId = uid();
+    const sessionBlobs: { itemId: string; blob: Blob }[] = [];
+    const sessionItems: import("@/lib/history-db").HistoryItem[] = [];
 
     for (const entry of pending) {
       if (abortRef.current) break;
@@ -198,6 +216,14 @@ function BatchPage() {
           outputUrl: url, outputBlob: blob, outputName: friendlyName,
         });
 
+        sessionBlobs.push({ itemId: entry.id, blob });
+        sessionItems.push({
+          id: entry.id,
+          filename: friendlyName,
+          sizeMB: parseFloat((blob.size / 1024 / 1024).toFixed(2)),
+          mime,
+        });
+
         await ffmpeg.deleteFile(inputName).catch(() => {});
         await ffmpeg.deleteFile(outName).catch(() => {});
 
@@ -212,6 +238,18 @@ function BatchPage() {
     setRunning(false);
     setAllDone(true);
     showToast("اكتملت المعالجة الدفعية!", "ok");
+
+    if (sessionItems.length > 0) {
+      const opMeta = BATCH_MODES.find(m => m.value === mode);
+      try {
+        await saveSession(
+          { id: sessionId, ts: Date.now(), op: mode, opLabel: opMeta?.label ?? mode, items: sessionItems },
+          sessionBlobs,
+        );
+        await refreshHistory();
+        setShowHistory(true);
+      } catch { /* storage full or denied — continue silently */ }
+    }
   }
 
   async function downloadAll() {
@@ -436,6 +474,58 @@ function BatchPage() {
             </div>
           </aside>
         </div>
+
+        {/* ─── History Panel ─── */}
+        <section className="rounded-2xl border border-border bg-card/50 overflow-hidden">
+          <button
+            onClick={() => setShowHistory(s => !s)}
+            className="w-full flex items-center justify-between px-5 py-3.5 text-sm font-bold hover:bg-secondary/40 transition"
+          >
+            <div className="flex items-center gap-2">
+              <History className="size-4 text-violet-400" />
+              سجل الجلسات
+              {history.length > 0 && (
+                <span className="rounded-full bg-violet-500/20 px-2 py-0.5 text-[10px] font-bold text-violet-400">
+                  {history.length}
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-3">
+              {history.length > 0 && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); clearAllHistory().then(refreshHistory); }}
+                  className="text-xs text-muted-foreground hover:text-destructive transition flex items-center gap-1"
+                >
+                  <Trash2 className="size-3" /> مسح الكل
+                </button>
+              )}
+              {showHistory ? <ChevronUp className="size-4" /> : <ChevronDown className="size-4" />}
+            </div>
+          </button>
+
+          {showHistory && (
+            <div className="border-t border-border/50 p-4">
+              {history.length === 0 ? (
+                <div className="py-8 text-center space-y-2">
+                  <Clock className="size-7 text-muted-foreground/30 mx-auto" />
+                  <p className="text-sm text-muted-foreground">لا توجد جلسات محفوظة</p>
+                  <p className="text-xs text-muted-foreground/50">بعد معالجة ملفات، يحفظ النظام النتائج هنا تلقائياً — يمكنك إعادة تحميلها حتى بعد تحديث الصفحة.</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {history.map(session => (
+                    <HistorySessionCard
+                      key={session.id}
+                      session={session}
+                      onDelete={() => removeSession(session.id, session.items.map(i => i.id)).then(refreshHistory)}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </section>
+
       </main>
     </div>
   );
@@ -617,6 +707,121 @@ function SummaryRow({ label, value, accent, ok, err }: { label: string; value: s
     <div className="flex items-center justify-between text-xs">
       <span className="text-muted-foreground">{label}</span>
       <span className={`font-semibold font-mono ${ok ? "text-emerald-400" : err ? "text-red-400" : accent ? "text-violet-400" : "text-foreground"}`}>{value}</span>
+    </div>
+  );
+}
+
+function HistorySessionCard({ session, onDelete }: { session: HistorySession; onDelete: () => void }) {
+  const [expanded, setExpanded] = useState(false);
+  const [downloading, setDownloading] = useState<string | null>(null);
+
+  const date = new Date(session.ts);
+  const dateStr = date.toLocaleDateString("ar-SA", { month: "short", day: "numeric" });
+  const timeStr = date.toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit" });
+  const totalMB = session.items.reduce((s, i) => s + i.sizeMB, 0).toFixed(1);
+
+  async function downloadItem(item: import("@/lib/history-db").HistoryItem) {
+    setDownloading(item.id);
+    try {
+      const blob = await getBlob(session.id, item.id);
+      if (!blob) { alert("الملف لم يعد متاحاً في التخزين"); return; }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = item.filename;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+    } finally {
+      setDownloading(null);
+    }
+  }
+
+  async function downloadAllItems() {
+    setDownloading("zip");
+    try {
+      const zip = new JSZip();
+      for (const item of session.items) {
+        const blob = await getBlob(session.id, item.id);
+        if (blob) zip.file(item.filename, blob);
+      }
+      const zipBlob = await zip.generateAsync({ type: "blob", compression: "DEFLATE", compressionOptions: { level: 1 } });
+      const url = URL.createObjectURL(zipBlob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `session_${session.op}_${session.id}.zip`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+    } finally {
+      setDownloading(null);
+    }
+  }
+
+  return (
+    <div className="rounded-xl border border-border bg-background/60 overflow-hidden">
+      {/* Session header */}
+      <div className="flex items-center gap-3 px-4 py-3">
+        <button onClick={() => setExpanded(e => !e)} className="flex-1 flex items-center gap-3 text-right min-w-0">
+          <div className="rounded-lg bg-violet-500/15 p-2 shrink-0">
+            <History className="size-3.5 text-violet-400" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-sm font-semibold">{session.opLabel}</span>
+              <span className="text-[10px] rounded-full bg-muted/60 px-2 py-0.5 text-muted-foreground font-mono">
+                {session.items.length} ملف · {totalMB} MB
+              </span>
+            </div>
+            <div className="flex items-center gap-1 mt-0.5 text-xs text-muted-foreground">
+              <Clock className="size-3 shrink-0" />
+              <span>{dateStr} · {timeStr}</span>
+            </div>
+          </div>
+          {expanded ? <ChevronUp className="size-4 text-muted-foreground shrink-0" /> : <ChevronDown className="size-4 text-muted-foreground shrink-0" />}
+        </button>
+
+        <div className="flex items-center gap-2 shrink-0">
+          {session.items.length > 1 && (
+            <button
+              onClick={downloadAllItems}
+              disabled={downloading === "zip"}
+              className="flex items-center gap-1 rounded-lg bg-emerald-500/15 px-2.5 py-1.5 text-[11px] font-bold text-emerald-400 hover:bg-emerald-500/25 transition disabled:opacity-50"
+            >
+              {downloading === "zip" ? <Loader2 className="size-3 animate-spin" /> : <Package className="size-3" />}
+              ZIP
+            </button>
+          )}
+          <button
+            onClick={onDelete}
+            className="rounded-lg p-1.5 text-muted-foreground hover:text-destructive hover:bg-red-500/10 transition"
+          >
+            <Trash2 className="size-3.5" />
+          </button>
+        </div>
+      </div>
+
+      {/* Expanded items list */}
+      {expanded && (
+        <div className="border-t border-border/40 divide-y divide-border/30">
+          {session.items.map(item => (
+            <div key={item.id} className="flex items-center gap-3 px-4 py-2.5">
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-medium truncate">{item.filename}</p>
+                <p className="text-[10px] text-muted-foreground">{item.sizeMB} MB · {item.mime.split("/")[1]?.toUpperCase()}</p>
+              </div>
+              <button
+                onClick={() => downloadItem(item)}
+                disabled={downloading === item.id}
+                className="flex items-center gap-1 rounded-lg bg-violet-500/15 px-3 py-1.5 text-[11px] font-bold text-violet-400 hover:bg-violet-500/25 transition disabled:opacity-50 shrink-0"
+              >
+                {downloading === item.id
+                  ? <Loader2 className="size-3 animate-spin" />
+                  : <Download className="size-3" />}
+                تحميل
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
