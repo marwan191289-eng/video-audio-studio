@@ -9,6 +9,18 @@ function globalLogListener({ message }: { message: string }) {
   for (const h of _logHandlers) h(message);
 }
 
+/**
+ * Detect if the browser supports SharedArrayBuffer (required for MT build).
+ * Needs Cross-Origin-Isolated context (COOP + COEP headers).
+ */
+function supportsSharedMemory(): boolean {
+  return (
+    typeof SharedArrayBuffer !== "undefined" &&
+    typeof crossOriginIsolated !== "undefined" &&
+    crossOriginIsolated === true
+  );
+}
+
 export async function getFFmpeg(onLog?: (msg: string) => void): Promise<FFmpeg> {
   if (onLog) _logHandlers.push(onLog);
   if (_ffmpeg) return _ffmpeg;
@@ -19,27 +31,26 @@ export async function getFFmpeg(onLog?: (msg: string) => void): Promise<FFmpeg> 
     ffmpeg.on("log", globalLogListener);
 
     try {
-      // ROOT CAUSE FIX (layered):
-      //
-      // @ffmpeg/ffmpeg in Vite ESM mode creates a *module* Web Worker.
-      // Module workers cannot use importScripts() — they fall back to
-      //   self.createFFmpegCore = (await import(coreURL)).default
-      // This requires coreURL to be an ES module with `export default`.
-      //
-      // The UMD build (ffmpeg-core.js) has NO `export default`, so .default
-      // is undefined → ERROR_IMPORT_FAILURE → "failed to import ffmpeg-core.js".
-      //
-      // Fix: use the ESM build (ffmpeg-core-esm.js which has `export default
-      // createFFmpegCore`). The ESM build uses import.meta.url internally, so
-      // it must be served as text/javascript (blob URL is fine for module import).
-      //
-      // Both files are wrapped in toBlobURL so the Replit proxy cannot interfere
-      // with MIME types or CORS headers.
-      const [coreURL, wasmURL] = await Promise.all([
-        toBlobURL("/ffmpeg-core-esm.js", "text/javascript"),
-        toBlobURL("/ffmpeg-core.wasm", "application/wasm"),
-      ]);
-      await ffmpeg.load({ coreURL, wasmURL });
+      const mt = supportsSharedMemory();
+
+      if (mt) {
+        // ── Multi-thread build (4-8× faster) ─────────────────────────────
+        // Uses SharedArrayBuffer + pthread workers for parallel encoding.
+        const [coreURL, wasmURL, workerURL] = await Promise.all([
+          toBlobURL("/ffmpeg-core-mt.js",        "text/javascript"),
+          toBlobURL("/ffmpeg-core-mt.wasm",      "application/wasm"),
+          toBlobURL("/ffmpeg-core-mt.worker.js", "text/javascript"),
+        ]);
+        await ffmpeg.load({ coreURL, wasmURL, workerURL });
+      } else {
+        // ── Single-thread fallback (ESM build) ───────────────────────────
+        // Works without SharedArrayBuffer / COOP-COEP headers.
+        const [coreURL, wasmURL] = await Promise.all([
+          toBlobURL("/ffmpeg-core-esm.js", "text/javascript"),
+          toBlobURL("/ffmpeg-core.wasm",   "application/wasm"),
+        ]);
+        await ffmpeg.load({ coreURL, wasmURL });
+      }
     } catch (err) {
       _loading = null;
       if (onLog) _logHandlers = _logHandlers.filter((h) => h !== onLog);
@@ -62,9 +73,7 @@ export function removeLogHandler(onLog: (msg: string) => void) {
 }
 
 export function resetFFmpeg() {
-  try {
-    _ffmpeg?.terminate();
-  } catch {}
+  try { _ffmpeg?.terminate(); } catch {}
   _ffmpeg = null;
   _loading = null;
   _logHandlers = [];
@@ -75,4 +84,9 @@ export function hasAudioByExt(filename: string): boolean {
   const ext = filename.split(".").pop()?.toLowerCase() ?? "";
   const noAudio = ["gif", "apng"];
   return !noAudio.includes(ext);
+}
+
+/** Returns true when running in a cross-origin isolated context (MT available) */
+export function isMultiThreaded(): boolean {
+  return supportsSharedMemory();
 }

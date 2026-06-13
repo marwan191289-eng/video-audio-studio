@@ -37,89 +37,160 @@ async function normalizeCatastrophicSsrResponse(response: Response): Promise<Res
   });
 }
 
-/** Headers required for SharedArrayBuffer (FFmpeg.wasm) */
+/**
+ * Headers required for SharedArrayBuffer — enables FFmpeg multi-threading.
+ * Without these, the browser denies access to SharedArrayBuffer and FFmpeg
+ * falls back to single-threaded WASM (4-8× slower).
+ */
 const COOP_COEP = {
-  "Cross-Origin-Opener-Policy": "same-origin",
+  "Cross-Origin-Opener-Policy":   "same-origin",
   "Cross-Origin-Embedder-Policy": "require-corp",
   "Cross-Origin-Resource-Policy": "cross-origin",
 };
 
-/** Add COOP/COEP to any Response */
+/** Inject COOP/COEP into every response */
 function withCrossOriginHeaders(res: Response): Response {
   const headers = new Headers(res.headers);
-  for (const [k, v] of Object.entries(COOP_COEP)) {
-    headers.set(k, v);
-  }
+  for (const [k, v] of Object.entries(COOP_COEP)) headers.set(k, v);
   return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
 }
 
-/** Cached FFmpeg core file buffers — read once from node_modules */
-let _coreJs: Buffer | null = null;
-let _coreWasm: Buffer | null = null;
+// ── FFmpeg file cache (read once from disk / node_modules) ──────────────────
 
-function getFFmpegFile(name: "js" | "wasm"): Buffer | null {
-  try {
-    const coreDir = join(process.cwd(), "node_modules/@ffmpeg/core/dist/umd");
-    if (name === "js") {
-      if (!_coreJs) _coreJs = readFileSync(join(coreDir, "ffmpeg-core.js"));
-      return _coreJs;
-    } else {
-      if (!_coreWasm) _coreWasm = readFileSync(join(coreDir, "ffmpeg-core.wasm"));
-      return _coreWasm;
+type FFmpegFileKey =
+  | "core-esm-js" | "core-umd-js" | "core-wasm"
+  | "core-mt-js"  | "core-mt-wasm" | "core-mt-worker";
+
+const _cache = new Map<FFmpegFileKey, Buffer>();
+
+function ffmpegBuf(key: FFmpegFileKey, ...candidates: string[]): Buffer | null {
+  if (_cache.has(key)) return _cache.get(key)!;
+  for (const p of candidates) {
+    if (existsSync(p)) {
+      try {
+        const buf = readFileSync(p);
+        _cache.set(key, buf);
+        return buf;
+      } catch { /* continue */ }
     }
-  } catch {
-    return null;
   }
+  return null;
 }
+
+/** Resolve a file path relative to project root */
+const R = (...parts: string[]) => join(process.cwd(), ...parts);
 
 export default {
   async fetch(request: Request, env: unknown, ctx: unknown) {
-    const url = new URL(request.url);
-    const { pathname } = url;
+    const url      = new URL(request.url);
+    const pathname = url.pathname;
 
-    // ── Serve FFmpeg core files with correct MIME + CORP headers ──────────
+    // ── Static FFmpeg files ─────────────────────────────────────────────────
+    //
+    // Priority: public/ directory first (always present after npm run build),
+    // then node_modules fallbacks for local dev.
+
+    // Single-thread ESM build (always available)
+    if (pathname === "/ffmpeg-core-esm.js") {
+      const buf = ffmpegBuf("core-esm-js",
+        R("public", "ffmpeg-core-esm.js"),
+        R("node_modules/@ffmpeg/core/dist/esm/ffmpeg-core.js"),
+      );
+      if (buf) return new Response(buf, {
+        headers: {
+          "Content-Type": "text/javascript; charset=utf-8",
+          "Cache-Control": "public, max-age=31536000, immutable",
+          "Cross-Origin-Resource-Policy": "cross-origin",
+        },
+      });
+    }
+
     if (pathname === "/ffmpeg-core.js") {
-      const buf = getFFmpegFile("js");
-      if (buf) {
-        return new Response(buf, {
-          status: 200,
-          headers: {
-            "Content-Type": "text/javascript; charset=utf-8",
-            "Cache-Control": "public, max-age=86400",
-            "Cross-Origin-Resource-Policy": "cross-origin",
-          },
-        });
-      }
+      const buf = ffmpegBuf("core-umd-js",
+        R("public", "ffmpeg-core.js"),
+        R("node_modules/@ffmpeg/core/dist/umd/ffmpeg-core.js"),
+      );
+      if (buf) return new Response(buf, {
+        headers: {
+          "Content-Type": "text/javascript; charset=utf-8",
+          "Cache-Control": "public, max-age=31536000, immutable",
+          "Cross-Origin-Resource-Policy": "cross-origin",
+        },
+      });
     }
 
     if (pathname === "/ffmpeg-core.wasm") {
-      const buf = getFFmpegFile("wasm");
-      if (buf) {
-        return new Response(buf, {
-          status: 200,
-          headers: {
-            "Content-Type": "application/wasm",
-            "Cache-Control": "public, max-age=86400",
-            "Cross-Origin-Resource-Policy": "cross-origin",
-          },
-        });
-      }
+      const buf = ffmpegBuf("core-wasm",
+        R("public", "ffmpeg-core.wasm"),
+        R("node_modules/@ffmpeg/core/dist/umd/ffmpeg-core.wasm"),
+        R("node_modules/@ffmpeg/core/dist/esm/ffmpeg-core.wasm"),
+      );
+      if (buf) return new Response(buf, {
+        headers: {
+          "Content-Type": "application/wasm",
+          "Cache-Control": "public, max-age=31536000, immutable",
+          "Cross-Origin-Resource-Policy": "cross-origin",
+        },
+      });
     }
 
-    // ── Serve uploaded video files ────────────────────────────────────────
+    // ── Multi-thread build files (4-8× faster when SharedArrayBuffer is available) ─
+    if (pathname === "/ffmpeg-core-mt.js") {
+      const buf = ffmpegBuf("core-mt-js",
+        R("public", "ffmpeg-core-mt.js"),
+        R("node_modules/@ffmpeg/core-mt/dist/esm/ffmpeg-core.js"),
+      );
+      if (buf) return new Response(buf, {
+        headers: {
+          "Content-Type": "text/javascript; charset=utf-8",
+          "Cache-Control": "public, max-age=31536000, immutable",
+          "Cross-Origin-Resource-Policy": "cross-origin",
+        },
+      });
+    }
+
+    if (pathname === "/ffmpeg-core-mt.wasm") {
+      const buf = ffmpegBuf("core-mt-wasm",
+        R("public", "ffmpeg-core-mt.wasm"),
+        R("node_modules/@ffmpeg/core-mt/dist/esm/ffmpeg-core.wasm"),
+      );
+      if (buf) return new Response(buf, {
+        headers: {
+          "Content-Type": "application/wasm",
+          "Cache-Control": "public, max-age=31536000, immutable",
+          "Cross-Origin-Resource-Policy": "cross-origin",
+        },
+      });
+    }
+
+    if (pathname === "/ffmpeg-core-mt.worker.js") {
+      const buf = ffmpegBuf("core-mt-worker",
+        R("public", "ffmpeg-core-mt.worker.js"),
+        R("node_modules/@ffmpeg/core-mt/dist/esm/ffmpeg-core.worker.js"),
+      );
+      if (buf) return new Response(buf, {
+        headers: {
+          "Content-Type": "text/javascript; charset=utf-8",
+          "Cache-Control": "public, max-age=31536000, immutable",
+          "Cross-Origin-Resource-Policy": "cross-origin",
+        },
+      });
+    }
+
+    // ── Uploaded video files API ─────────────────────────────────────────────
     if (pathname.startsWith("/api/videos/")) {
       const fileName = decodeURIComponent(pathname.slice("/api/videos/".length));
       if (fileName && !fileName.includes("..")) {
-        const filePath = join(process.cwd(), "uploads", fileName);
+        const filePath = R("uploads", fileName);
         if (existsSync(filePath)) {
           const buf = await readFile(filePath);
           const ext = fileName.split(".").pop()?.toLowerCase() ?? "";
           const mime =
-            ext === "mp4" ? "video/mp4" :
-            ext === "webm" ? "video/webm" :
-            ext === "gif" ? "image/gif" :
-            ext === "mp3" ? "audio/mpeg" :
-            ext === "wav" ? "audio/wav" :
+            ext === "mp4"  ? "video/mp4"           :
+            ext === "webm" ? "video/webm"           :
+            ext === "gif"  ? "image/gif"            :
+            ext === "mp3"  ? "audio/mpeg"           :
+            ext === "wav"  ? "audio/wav"            :
             "application/octet-stream";
           return new Response(buf, {
             status: 200,
@@ -134,9 +205,9 @@ export default {
       }
     }
 
-    // ── Normal TanStack Start handler ─────────────────────────────────────
+    // ── TanStack Start handler ────────────────────────────────────────────────
     try {
-      const handler = await getServerEntry();
+      const handler  = await getServerEntry();
       const response = await handler.fetch(request, env, ctx);
       const normalized = await normalizeCatastrophicSsrResponse(response);
       return withCrossOriginHeaders(normalized);
