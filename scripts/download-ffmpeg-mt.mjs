@@ -1,15 +1,11 @@
 /**
- * download-ffmpeg-mt.mjs
- * Copies multi-threaded FFmpeg WASM files from @ffmpeg/core-mt (node_modules)
- * into public/ so the browser can load the faster parallel build.
- *
- * Run automatically via: npm run build  (prebuild hook)
+ * download-ffmpeg-mt.mjs — Fixed version
+ * Copies MT FFmpeg files from @ffmpeg/core-mt to public/
  */
 
-import { existsSync, mkdirSync, copyFileSync } from "fs";
-import { createRequire }                        from "module";
-import path                                     from "path";
-import { fileURLToPath }                        from "url";
+import { existsSync, mkdirSync, copyFileSync, readdirSync } from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT      = path.resolve(__dirname, "..");
@@ -17,34 +13,63 @@ const PUBLIC    = path.join(ROOT, "public");
 
 if (!existsSync(PUBLIC)) mkdirSync(PUBLIC, { recursive: true });
 
-const require = createRequire(import.meta.url);
+// Find @ffmpeg/core-mt in node_modules
+const MT_ROOT = path.join(ROOT, "node_modules", "@ffmpeg", "core-mt");
 
-let hasMT = true;
-try { require.resolve("@ffmpeg/core-mt"); } catch { hasMT = false; }
-
-if (!hasMT) {
-  console.log("⚠️  @ffmpeg/core-mt not installed — skipping MT copy (single-thread fallback).");
+if (!existsSync(MT_ROOT)) {
+  console.log("⚠️  @ffmpeg/core-mt not found — skipping MT copy.");
   process.exit(0);
 }
 
-const FILES = [
-  { src: require.resolve("@ffmpeg/core-mt/dist/esm/ffmpeg-core.js"),        dst: "ffmpeg-core-mt.js"        },
-  { src: require.resolve("@ffmpeg/core-mt/dist/esm/ffmpeg-core.wasm"),      dst: "ffmpeg-core-mt.wasm"      },
-  { src: require.resolve("@ffmpeg/core-mt/dist/esm/ffmpeg-core.worker.js"), dst: "ffmpeg-core-mt.worker.js" },
+// Auto-detect the dist directory (could be dist/esm, dist/umd, dist/, etc.)
+function findFiles(dir, names) {
+  const results = {};
+  function walk(d) {
+    let entries;
+    try { entries = readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const full = path.join(d, e.name);
+      if (e.isDirectory()) { walk(full); continue; }
+      for (const n of names) {
+        if (e.name === n && !results[n]) results[n] = full;
+      }
+    }
+  }
+  walk(dir);
+  return results;
+}
+
+const found = findFiles(MT_ROOT, [
+  "ffmpeg-core.js",
+  "ffmpeg-core.wasm",
+  "ffmpeg-core.worker.js",
+]);
+
+console.log("Found MT files:", found);
+
+const MAP = [
+  { key: "ffmpeg-core.js",        dst: "ffmpeg-core-mt.js"        },
+  { key: "ffmpeg-core.wasm",      dst: "ffmpeg-core-mt.wasm"      },
+  { key: "ffmpeg-core.worker.js", dst: "ffmpeg-core-mt.worker.js" },
 ];
 
 let ok = 0;
-for (const { src, dst } of FILES) {
+for (const { key, dst } of MAP) {
+  const src     = found[key];
   const dstPath = path.join(PUBLIC, dst);
-  try {
-    copyFileSync(src, dstPath);
-    console.log(`  ✅  public/${dst}`);
-    ok++;
-  } catch (e) {
-    console.warn(`  ⚠️  could not copy ${dst}: ${e.message}`);
+  if (src && existsSync(src)) {
+    try {
+      copyFileSync(src, dstPath);
+      console.log(`  ✅  public/${dst}`);
+      ok++;
+    } catch (e) {
+      console.warn(`  ⚠️  Failed: ${e.message}`);
+    }
+  } else {
+    console.warn(`  ⚠️  Not found: ${key}`);
   }
 }
 
-console.log(ok === FILES.length
-  ? "\n🚀  FFmpeg MT ready — parallel encoding ENABLED (4-8× faster)"
-  : "\n⚠️  Some MT files missing — falling back to single-thread");
+console.log(ok === MAP.length
+  ? "\n🚀  FFmpeg MT ready — parallel encoding ENABLED"
+  : `\n⚠️  ${ok}/${MAP.length} MT files copied — partial MT support`);
