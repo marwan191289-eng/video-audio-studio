@@ -4,7 +4,6 @@ import {
   Fingerprint, Droplets, Music, Scissors, Zap, Shield,
   ChevronRight, Star, Globe, Lock, Cpu, Layers, Blend,
 } from "lucide-react";
-import { FFmpegModeBadge } from "@/components/FFmpegModeBadge";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -133,8 +132,6 @@ function Index() {
           <div className="inline-flex items-center gap-2 rounded-full border border-border/60 bg-card/60 px-4 py-1.5 text-xs text-muted-foreground mb-8 backdrop-blur-sm">
             <span className="size-1.5 rounded-full bg-emerald-400 animate-pulse" />
             معالجة محلية 100% · لا رفع لأي خادم · مجانية تماماً
-            <span className="mx-1 opacity-40">|</span>
-            <FFmpegModeBadge />
           </div>
 
           <h1 className="text-5xl md:text-7xl font-black leading-[1.1] tracking-tight mb-6">
@@ -229,6 +226,15 @@ function Index() {
             ))}
           </div>
         </section>
+
+        {/* Developer Signature */}
+        <footer className="mt-8 mb-4 text-center">
+          <div className="inline-flex items-center gap-2.5 rounded-2xl border border-violet-500/20 bg-violet-500/5 px-5 py-2.5 backdrop-blur-sm">
+            <span className="size-2 rounded-full bg-violet-400 animate-pulse" />
+            <span className="text-xs text-muted-foreground">Developer:</span>
+            <span className="text-xs font-bold text-violet-400 tracking-wide">Marwan Negm</span>
+          </div>
+        </footer>
       </main>
     </div>
   );

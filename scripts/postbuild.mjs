@@ -1,46 +1,37 @@
 /**
- * postbuild.mjs — Runs after `npm run build`
- * Ensures all FFmpeg WASM files are in dist/public/ for serving.
+ * postbuild.mjs — ينسخ ملفات FFmpeg Multi-Thread إلى dist/client بعد البناء
+ * Developer: Marwan Negm
  */
-
-import { existsSync, copyFileSync, mkdirSync } from "fs";
-import { createRequire } from "module";
+import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
-const __dirname  = path.dirname(fileURLToPath(import.meta.url));
-const ROOT       = path.resolve(__dirname, "..");
-const DIST_PUB   = path.join(ROOT, "dist", "public");
-const PUBLIC_SRC = path.join(ROOT, "public");
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const root = path.join(__dirname, "..");
+const distClient = path.join(root, "dist", "client");
 
-if (!existsSync(DIST_PUB)) mkdirSync(DIST_PUB, { recursive: true });
-
-const require = createRequire(import.meta.url);
-
-const FILES = [
-  // Single-thread ESM build
-  { src: path.join(PUBLIC_SRC, "ffmpeg-core-esm.js"),          dst: "ffmpeg-core-esm.js" },
-  { src: path.join(PUBLIC_SRC, "ffmpeg-core.js"),               dst: "ffmpeg-core.js" },
-  { src: path.join(PUBLIC_SRC, "ffmpeg-core.wasm"),             dst: "ffmpeg-core.wasm" },
-  // Multi-thread build
-  { src: path.join(PUBLIC_SRC, "ffmpeg-core-mt.js"),            dst: "ffmpeg-core-mt.js" },
-  { src: path.join(PUBLIC_SRC, "ffmpeg-core-mt.wasm"),          dst: "ffmpeg-core-mt.wasm" },
-  { src: path.join(PUBLIC_SRC, "ffmpeg-core-mt.worker.js"),     dst: "ffmpeg-core-mt.worker.js" },
+const sources = [
+  ["public/ffmpeg-core-esm.js",       "ffmpeg-core-esm.js"],
+  ["public/ffmpeg-core.js",           "ffmpeg-core.js"],
+  ["public/ffmpeg-core.wasm",         "ffmpeg-core.wasm"],
+  ["public/ffmpeg-core-mt.js",        "ffmpeg-core-mt.js"],
+  ["public/ffmpeg-core-mt.wasm",      "ffmpeg-core-mt.wasm"],
+  ["public/ffmpeg-core-mt.worker.js", "ffmpeg-core-mt.worker.js"],
 ];
 
-let copied = 0;
-for (const { src, dst } of FILES) {
-  const dstPath = path.join(DIST_PUB, dst);
-  if (existsSync(src)) {
-    try {
-      copyFileSync(src, dstPath);
-      console.log(`  ✅  dist/public/${dst}`);
-      copied++;
-    } catch (e) {
-      console.warn(`  ⚠️  Failed to copy ${dst}: ${e.message}`);
-    }
-  } else {
-    console.log(`  ⏭  skipped (not found): public/${dst}`);
+console.log("\n📦 Copying FFmpeg WASM files to dist/client...");
+let ok = 0, skip = 0;
+for (const [src, dest] of sources) {
+  const srcPath  = path.join(root, src);
+  const destPath = path.join(distClient, dest);
+  if (!fs.existsSync(srcPath)) {
+    console.warn("  ⚠️  Missing: " + src);
+    skip++;
+    continue;
   }
+  fs.copyFileSync(srcPath, destPath);
+  const size = (fs.statSync(destPath).size / 1024 / 1024).toFixed(1);
+  console.log("  ✅  " + dest + " (" + size + " MB)");
+  ok++;
 }
-console.log(`\n📦  Post-build: ${copied}/${FILES.length} FFmpeg files copied to dist/public/`);
+console.log("\n  Done: " + ok + " copied, " + skip + " skipped\n");

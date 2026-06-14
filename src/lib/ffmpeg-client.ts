@@ -1,3 +1,13 @@
+/**
+ * ffmpeg-client.ts — محرك FFmpeg المُحسَّن
+ * 
+ * التحسينات المطبَّقة:
+ * 1. Multi-Thread WASM (@ffmpeg/core-mt) — يستخدم كل أنوية المعالج
+ * 2. Single FFmpeg instance مع singleton pattern — لا إعادة تحميل
+ * 3. Smart file cache — لا إعادة كتابة نفس الملف
+ * 4. fastEncodeArgs() مركزية — preset ultrafast + tune fastdecode + threads
+ */
+
 import { FFmpeg } from "@ffmpeg/ffmpeg";
 import { toBlobURL } from "@ffmpeg/util";
 
@@ -5,22 +15,25 @@ let _ffmpeg: FFmpeg | null = null;
 let _loading: Promise<FFmpeg> | null = null;
 let _logHandlers: Array<(msg: string) => void> = [];
 
+// Smart file cache — skip re-writing same file to WASM FS
+let _cachedFileName: string | null = null;
+let _cachedFileSize: number | null = null;
+
 function globalLogListener({ message }: { message: string }) {
   for (const h of _logHandlers) h(message);
 }
 
-/**
- * Detect if the browser supports SharedArrayBuffer (required for MT build).
- * Needs Cross-Origin-Isolated context (COOP + COEP headers).
- */
-function supportsSharedMemory(): boolean {
-  return (
-    typeof SharedArrayBuffer !== "undefined" &&
-    typeof crossOriginIsolated !== "undefined" &&
-    crossOriginIsolated === true
-  );
+/** عدد خيوط المعالج المتاحة (بحد أقصى 8) */
+export function getOptimalThreads(): number {
+  if (typeof navigator === "undefined") return 2;
+  return Math.min(navigator.hardwareConcurrency ?? 2, 8);
 }
 
+/**
+ * تحميل FFmpeg مرة واحدة — يستخدم Multi-Thread build إذا
+ * كان المتصفح يدعم SharedArrayBuffer (Chrome/Edge/Firefox الحديث)
+ * مع Fallback للبناء العادي تلقائياً.
+ */
 export async function getFFmpeg(onLog?: (msg: string) => void): Promise<FFmpeg> {
   if (onLog) _logHandlers.push(onLog);
   if (_ffmpeg) return _ffmpeg;
@@ -30,35 +43,44 @@ export async function getFFmpeg(onLog?: (msg: string) => void): Promise<FFmpeg> 
     const ffmpeg = new FFmpeg();
     ffmpeg.on("log", globalLogListener);
 
-    try {
-      const mt = supportsSharedMemory();
+    // ── محاولة تحميل Multi-Thread build أولاً ──────────────────────────
+    const supportsMT =
+      typeof SharedArrayBuffer !== "undefined" &&
+      typeof Atomics !== "undefined";
 
-      if (mt) {
-        // ── Multi-thread build (4-8× faster) ─────────────────────────────
-        // Uses SharedArrayBuffer + pthread workers for parallel encoding.
+    let loaded = false;
+
+    if (supportsMT) {
+      try {
         const [coreURL, wasmURL, workerURL] = await Promise.all([
           toBlobURL("/ffmpeg-core-mt.js",        "text/javascript"),
           toBlobURL("/ffmpeg-core-mt.wasm",      "application/wasm"),
           toBlobURL("/ffmpeg-core-mt.worker.js", "text/javascript"),
         ]);
         await ffmpeg.load({ coreURL, wasmURL, workerURL });
-      } else {
-        // ── Single-thread fallback (ESM build) ───────────────────────────
-        // Works without SharedArrayBuffer / COOP-COEP headers.
+        console.info(`[FFmpeg] ✅ Multi-Thread loaded (${getOptimalThreads()} cores)`);
+        loaded = true;
+      } catch (mtErr) {
+        console.warn("[FFmpeg] Multi-Thread load failed, falling back to single-thread:", mtErr);
+      }
+    }
+
+    // ── Fallback: Single-Thread ESM build ──────────────────────────────
+    if (!loaded) {
+      try {
         const [coreURL, wasmURL] = await Promise.all([
-          toBlobURL("/ffmpeg-core-esm.js", "text/javascript"),
-          toBlobURL("/ffmpeg-core.wasm",   "application/wasm"),
+          toBlobURL("/ffmpeg-core-esm.js",  "text/javascript"),
+          toBlobURL("/ffmpeg-core.wasm",    "application/wasm"),
         ]);
         await ffmpeg.load({ coreURL, wasmURL });
+        console.info("[FFmpeg] ✅ Single-Thread loaded");
+        loaded = true;
+      } catch (stErr) {
+        _loading = null;
+        if (onLog) _logHandlers = _logHandlers.filter((h) => h !== onLog);
+        const raw = stErr instanceof Error ? stErr.message : "";
+        throw new Error(raw || "فشل تحميل FFmpeg — تأكد من أن المتصفح يدعم WebAssembly وأعد المحاولة");
       }
-    } catch (err) {
-      _loading = null;
-      if (onLog) _logHandlers = _logHandlers.filter((h) => h !== onLog);
-      const raw = err instanceof Error ? err.message : typeof err === "string" ? err : "";
-      throw new Error(
-        raw ||
-          "فشل تحميل FFmpeg — تأكد من أن المتصفح يدعم WebAssembly وأعد المحاولة",
-      );
     }
 
     _ffmpeg = ffmpeg;
@@ -77,16 +99,61 @@ export function resetFFmpeg() {
   _ffmpeg = null;
   _loading = null;
   _logHandlers = [];
+  _cachedFileName = null;
+  _cachedFileSize = null;
 }
 
 /** Check if the file likely has an audio stream based on extension */
 export function hasAudioByExt(filename: string): boolean {
   const ext = filename.split(".").pop()?.toLowerCase() ?? "";
-  const noAudio = ["gif", "apng"];
-  return !noAudio.includes(ext);
+  return !["gif", "apng"].includes(ext);
 }
 
-/** Returns true when running in a cross-origin isolated context (MT available) */
-export function isMultiThreaded(): boolean {
-  return supportsSharedMemory();
+/**
+ * كتابة ملف لـ WASM FS مع تخزين مؤقت ذكي.
+ * إذا كان نفس الملف موجوداً بالفعل يتخطى الكتابة.
+ */
+export async function writeFileOptimized(
+  ffmpeg: FFmpeg,
+  name: string,
+  data: Uint8Array,
+): Promise<void> {
+  if (_cachedFileName === name && _cachedFileSize === data.byteLength) {
+    return; // نفس الملف موجود بالفعل
+  }
+  await ffmpeg.writeFile(name, data);
+  _cachedFileName = name;
+  _cachedFileSize = data.byteLength;
+}
+
+export function invalidateFileCache() {
+  _cachedFileName = null;
+  _cachedFileSize = null;
+}
+
+/**
+ * بناء أوامر الترميز المثلى لـ libx264.
+ * ultrafast + fastdecode + threads صحيحة = أسرع معالجة ممكنة.
+ */
+export function fastEncodeArgs(options: {
+  crf?: number;
+  hasAudio: boolean;
+  audioArgs?: string[];
+  outName: string;
+  tune?: "film" | "animation" | "zerolatency" | "fastdecode";
+}): string[] {
+  const { crf = 18, hasAudio, audioArgs, outName, tune = "fastdecode" } = options;
+  const threads = String(getOptimalThreads());
+  const defaultAudio = hasAudio ? ["-c:a", "copy"] : ["-an"];
+
+  return [
+    "-c:v",      "libx264",
+    "-preset",   "ultrafast",
+    "-tune",     tune,
+    "-crf",      String(crf),
+    "-threads",  threads,
+    "-movflags", "+faststart",
+    ...(audioArgs ?? defaultAudio),
+    outName,
+  ];
 }
