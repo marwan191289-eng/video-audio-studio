@@ -9,6 +9,7 @@ const PORT = "8089";
 async function test() {
   const p = spawn("node", [path.join(__dirname, "serve.mjs")], {
     stdio: "pipe",
+    env: { ...process.env, PORT },
   });
 
   p.stdout.on("data", (d) => process.stdout.write(d));
