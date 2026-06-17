@@ -12,7 +12,7 @@ import http from "http";
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { fileURLToPath } from "url";
+import { fileURLToPath, pathToFileURL } from "url";
 import { spawn } from "child_process";
 import Busboy from "busboy";
 import { createRequire } from "module";
@@ -28,7 +28,9 @@ function resolveFfmpegBin() {
   try {
     const bin = _require("ffmpeg-static");
     if (bin && fs.existsSync(bin)) return bin;
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
   // 2. env override
   if (process.env.FFMPEG_PATH && fs.existsSync(process.env.FFMPEG_PATH))
     return process.env.FFMPEG_PATH;
@@ -80,7 +82,9 @@ let ssrHandler = null;
 async function getSSRHandler() {
   if (ssrHandler) return ssrHandler;
   try {
-    const mod = await import(path.join(__dirname, "dist", "server", "server.js"));
+    const mod = await import(
+      pathToFileURL(path.join(__dirname, "dist", "server", "server.js")).href
+    );
     ssrHandler = mod.default;
     return ssrHandler;
   } catch (e) {
@@ -227,12 +231,18 @@ async function handleEnhanceApi(req, res) {
       FFMPEG_BIN,
       [
         "-y",
-        "-i", inputPath,
-        "-vf", vfFilters,
-        "-c:v", "libx264",
-        "-preset", "fast",
-        "-crf", "20",
-        "-c:a", "copy",
+        "-i",
+        inputPath,
+        "-vf",
+        vfFilters,
+        "-c:v",
+        "libx264",
+        "-preset",
+        "fast",
+        "-crf",
+        "20",
+        "-c:a",
+        "copy",
         outputPath,
       ],
       { stdio: ["ignore", "ignore", "pipe"] },
