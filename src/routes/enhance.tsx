@@ -797,21 +797,26 @@ function EnhancePage() {
           appendLog(`📤 الجزء ${i + 1}/${totalChunks} — ${((end) / 1024 / 1024).toFixed(0)} MB`);
         }
 
-        appendLog("☁️ جاري الإرسال إلى Rendi للمعالجة السحابية...");
+        appendLog("⚙️ جاري إرسال الملف للسيرفر للمعالجة...");
         setProgress(50);
 
-        let rendiTimer: ReturnType<typeof setInterval> | null = setInterval(() => {
+        let serverTimer: ReturnType<typeof setInterval> | null = setInterval(() => {
           setProgress((p) => { if (p < 88) return +(p + 0.25).toFixed(2); return p; });
         }, 1000);
 
+        const enhanceForm = new FormData();
+        enhanceForm.append("sessionId", sessionId);
+        enhanceForm.append("totalChunks", String(totalChunks));
+        enhanceForm.append("mode", mode);
+        enhanceForm.append("settings", JSON.stringify(modeSettings));
+
         try {
-          res = await fetch("/api/rendi-enhance", {
+          res = await fetch("/api/enhance", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ sessionId, totalChunks, mode, settings: modeSettings }),
+            body: enhanceForm,
           });
         } finally {
-          if (rendiTimer) { clearInterval(rendiTimer); rendiTimer = null; }
+          if (serverTimer) { clearInterval(serverTimer); serverTimer = null; }
         }
       } else {
         // ── Direct upload for small files ──────────────────────────────────
