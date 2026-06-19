@@ -770,44 +770,79 @@ function EnhancePage() {
       form.append("mode", mode);
       form.append("settings", JSON.stringify(modeSettings));
 
-      // Track upload progress via XMLHttpRequest for accurate progress
-      const { blob: resultBlob, ok, statusText } = await new Promise<{
-        blob: Blob | null;
-        ok: boolean;
-        statusText: string;
-      }>((resolve) => {
-        const xhr = new XMLHttpRequest();
-        xhr.open("POST", "/api/enhance");
-        xhr.responseType = "blob";
+      // ── Smooth animated progress using fetch() ────────────────────────────
+      // Phase 1 (0→55%): animate while uploading + server processing
+      // Phase 2 (55→92%): animate while downloading response body
+      // Phase 3: jump to 100% on completion
+      let progressTimer: ReturnType<typeof setInterval> | null = setInterval(() => {
+        setProgress((p) => {
+          if (p < 55) return +(p + 2.5).toFixed(1);
+          return p;
+        });
+      }, 300);
 
-        xhr.upload.onprogress = (e) => {
-          if (e.lengthComputable) {
-            const pct = Math.round((e.loaded / e.total) * 60);
-            setProgress(pct);
-            if (pct % 20 === 0)
-              appendLog(`📤 رفع: ${pct}%`);
+      let res: Response;
+      try {
+        res = await fetch("/api/enhance", { method: "POST", body: form });
+      } finally {
+        if (progressTimer) { clearInterval(progressTimer); progressTimer = null; }
+      }
+
+      if (!res.ok) {
+        let errMsg = `HTTP ${res.status}`;
+        try { errMsg = await res.text() || errMsg; } catch { /* ignore */ }
+        throw new Error(errMsg);
+      }
+
+      appendLog("⚙️ السيرفر جاهز — جاري استلام الملف المُعالَج...");
+      setProgress(60);
+
+      // Phase 2: stream the response body with real progress tracking
+      const contentLength = parseInt(res.headers.get("Content-Length") ?? "0", 10);
+      let resultBlob: Blob;
+
+      if (contentLength > 0 && res.body) {
+        const reader = res.body.getReader();
+        const chunks: Uint8Array[] = [];
+        let received = 0;
+
+        progressTimer = setInterval(() => {
+          setProgress((p) => Math.min(p + 0.8, 92));
+        }, 400);
+
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            chunks.push(value);
+            received += value.length;
+            if (contentLength > 0) {
+              const pct = 60 + Math.round((received / contentLength) * 32);
+              setProgress(pct);
+            }
           }
-        };
+        } finally {
+          if (progressTimer) { clearInterval(progressTimer); progressTimer = null; }
+        }
 
-        xhr.onprogress = () => {
-          setProgress((p) => Math.min(p + 2, 95));
-        };
-
-        xhr.onload = () => {
-          setProgress(100);
-          if (xhr.status >= 200 && xhr.status < 300) {
-            resolve({ blob: xhr.response as Blob, ok: true, statusText: "" });
-          } else {
-            resolve({ blob: null, ok: false, statusText: `HTTP ${xhr.status}` });
-          }
-        };
-
-        xhr.onerror = () => resolve({ blob: null, ok: false, statusText: "network error" });
-        xhr.send(form);
-      });
-
-      if (!ok || !resultBlob) {
-        throw new Error(statusText || "فشل طلب السيرفر");
+        const all = new Uint8Array(received);
+        let offset = 0;
+        for (const chunk of chunks) { all.set(chunk, offset); offset += chunk.length; }
+        const mime = mode === "extract-audio" ? "audio/mpeg"
+          : mode === "gif" ? "image/gif"
+          : mode === "thumbnail" ? "image/jpeg"
+          : "video/mp4";
+        resultBlob = new Blob([all], { type: mime });
+      } else {
+        // Fallback: simple blob() if Content-Length not available
+        progressTimer = setInterval(() => {
+          setProgress((p) => Math.min(p + 0.8, 92));
+        }, 400);
+        try {
+          resultBlob = await res.blob();
+        } finally {
+          if (progressTimer) { clearInterval(progressTimer); progressTimer = null; }
+        }
       }
 
       // Determine output extension from mode
@@ -819,6 +854,7 @@ function EnhancePage() {
       const ext = extMap[mode] ?? "mp4";
       const outName = `cloud-${mode}-output.${ext}`;
 
+      setProgress(100);
       const url = URL.createObjectURL(resultBlob);
       setOutputBlob(resultBlob);
       setOutputUrl(url);
