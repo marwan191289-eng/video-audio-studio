@@ -4,13 +4,19 @@ description: How to unblock bun install when @tanstack/react-start requires h3-v
 ---
 
 ## The rule
-When `bun install` fails with `GET http://package-firewall.replit.local/npm/h3-v2/-/h3-v2-2.0.1-rc.20.tgz - 404`, manually download and extract the tarball.
+When `bun install` fails with `GET http://package-firewall.replit.local/npm/h3-v2/-/h3-v2-2.0.1-rc.20.tgz - 404`, manually download and extract the tarball from npmjs.org directly.
 
-**Why:** Replit's package firewall blocks pre-release/RC packages that were published less than 24 hours ago (bunfig.toml `minimumReleaseAge`). The `h3-v2` alias (`npm:h3@2.0.1-rc.20`) is a dependency of `@tanstack/start-server-core`, which is required by `@tanstack/react-start`.
+**Why:** Replit's package firewall blocks pre-release/RC packages. The `h3-v2` alias (`npm:h3@2.0.1-rc.20`) is a dependency of `@tanstack/start-server-core`, which is required by `@tanstack/react-start`. Without it, vite dev fails with `ResolveMessage {}`.
 
 **How to apply:**
-1. Download directly from registry: `curl -sL "https://registry.npmjs.org/h3/-/h3-2.0.1-rc.20.tgz" -o /tmp/h3-v2.tgz`
-2. Extract into node_modules: `cd /tmp && tar -xzf h3-v2.tgz && cp -r package/* /path/to/node_modules/h3-v2/`
-3. Then run `bun install` — it will find the package already present and succeed.
+1. Download from npm registry: `curl -sL "https://registry.npmjs.org/h3/-/h3-2.0.1-rc.20.tgz" -o /tmp/h3-real.tgz`
+2. Extract with strip: `mkdir -p node_modules/h3-v2 && tar -xzf /tmp/h3-real.tgz -C node_modules/h3-v2 --strip-components=1`
+3. The app is now runnable with `bun run dev`
 
-Note: `node_modules/h3-v2/` directory may already exist (from partial prior install) — just copy files into it.
+**Persistence:** A `postinstall` script in `package.json` calls `node scripts/setup-packages.mjs` which re-downloads and installs `h3-v2` automatically after each `bun install`.
+
+**Also fixed in this project:**
+- Vite dev plugin now handles `/api/enhance-async`, `/api/job/:id`, `/api/job-result/:id` (previously only `/api/upload-chunk` and `/api/enhance` were handled — these missing routes went to TanStack Start which had body size limits)
+- `serve.mjs` production server now also handles all those async job API routes with Busboy (no body size limit)
+- DB schema was pushed with `bunx drizzle-kit push`
+- ffmpeg installed as system dependency via Nix

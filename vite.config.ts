@@ -7,6 +7,15 @@ import path from "path";
 import type { Plugin } from "vite";
 
 function cloudEnhanceDevPlugin(): Plugin {
+  // In-memory job store for async processing
+  const _jobs: Map<string, {
+    status: "processing" | "done" | "failed";
+    outputPath?: string;
+    ext: string;
+    error?: string;
+    createdAt: number;
+  }> = new Map();
+
   return {
     name: "api-enhance-dev",
     apply: "serve",
@@ -14,9 +23,10 @@ function cloudEnhanceDevPlugin(): Plugin {
       server.middlewares.use(async (req: any, res: any, next: any) => {
         const url = req.url as string;
         const method = req.method as string;
+        const pathname = url.split("?")[0];
 
         // ── POST /api/upload-chunk ─────────────────────────────────────────
-        if (url === "/api/upload-chunk" && method === "POST") {
+        if (pathname === "/api/upload-chunk" && method === "POST") {
           try {
             const [
               { default: Busboy },
@@ -73,8 +83,199 @@ function cloudEnhanceDevPlugin(): Plugin {
           return;
         }
 
-        // ── POST /api/enhance ──────────────────────────────────────────────
-        if (url === "/api/enhance" && method === "POST") {
+        // ── POST /api/enhance-async ────────────────────────────────────────
+        if (pathname === "/api/enhance-async" && method === "POST") {
+          try {
+            const [
+              { default: Busboy },
+              { tmpdir },
+              { join },
+            ] = await Promise.all([
+              import("busboy"),
+              import("os"),
+              import("path"),
+            ]);
+
+            const bb = Busboy({ headers: req.headers });
+            let fileBuffer: Buffer | null = null;
+            let sessionId = "";
+            let totalChunks = 0;
+            let mode = "enhance";
+            const settings: Record<string, unknown> = {};
+
+            bb.on("file", (_field: string, file: any) => {
+              const parts: Buffer[] = [];
+              file.on("data", (d: Buffer) => parts.push(d));
+              file.on("end", () => { fileBuffer = Buffer.concat(parts); });
+            });
+
+            bb.on("field", (name: string, value: string) => {
+              if (name === "mode") mode = value;
+              if (name === "sessionId") sessionId = value;
+              if (name === "totalChunks") totalChunks = parseInt(value, 10);
+              if (name === "settings") {
+                try { Object.assign(settings, JSON.parse(value)); } catch { /* ignore */ }
+              }
+            });
+
+            await new Promise<void>((resolve, reject) => {
+              bb.on("finish", resolve);
+              bb.on("error", reject);
+              req.pipe(bb);
+            });
+
+            const { outputExtForMode } = await import("./server/build-ffmpeg-args.ts");
+            const ext: string = typeof outputExtForMode === "function"
+              ? outputExtForMode(mode)
+              : (mode === "extract-audio" ? "mp3" : mode === "gif" ? "gif" : mode === "thumbnail" ? "jpg" : "mp4");
+
+            const jobId = crypto.randomUUID();
+            _jobs.set(jobId, { status: "processing", ext, createdAt: Date.now() });
+
+            // Run job in background (fire-and-forget)
+            const _sid = sessionId;
+            const _tc = totalChunks;
+            const _fb = fileBuffer;
+            const _mode = mode;
+            const _settings = settings;
+            const _ext = ext;
+            const _jobId = jobId;
+
+            (async () => {
+              const { execFile } = await import("child_process");
+              const { promisify } = await import("util");
+              const { writeFile: wf, readFile: rf, unlink: ul, readdir, rm } = await import("fs/promises");
+              const { existsSync: ex } = await import("fs");
+              const { createRequire } = await import("module");
+              const execFileAsync = promisify(execFile);
+
+              let ffmpegBin = "ffmpeg";
+              try {
+                const { execFileSync } = await import("child_process");
+                execFileSync("ffmpeg", ["-version"], { stdio: "ignore" });
+              } catch {
+                try {
+                  const _cjsReq = createRequire(import.meta.url);
+                  const bin = _cjsReq("ffmpeg-static") as string;
+                  if (bin && ex(bin)) ffmpegBin = bin;
+                } catch { /* ignore */ }
+                if (process.env.FFMPEG_PATH && ex(process.env.FFMPEG_PATH)) {
+                  ffmpegBin = process.env.FFMPEG_PATH;
+                }
+              }
+
+              const { buildFFmpegArgs } = await import("./server/build-ffmpeg-args.ts");
+              const ts = Date.now();
+              const tmpIn = join(tmpdir(), `job-in-${ts}.mp4`);
+              const tmpOut = join(tmpdir(), `job-out-${ts}.${_ext}`);
+              let sessionDir: string | null = null;
+
+              try {
+                if (_sid && _tc > 0) {
+                  sessionDir = join(tmpdir(), "vep-sessions", _sid);
+                  const files = await readdir(sessionDir);
+                  const chunkFiles = files.filter((f) => f.startsWith("chunk_")).sort();
+                  if (chunkFiles.length !== _tc) {
+                    throw new Error(`Expected ${_tc} chunks, received ${chunkFiles.length}`);
+                  }
+                  const parts: Buffer[] = [];
+                  for (const cf of chunkFiles) parts.push(await rf(join(sessionDir, cf)));
+                  await wf(tmpIn, Buffer.concat(parts));
+                } else if (_fb) {
+                  await wf(tmpIn, _fb);
+                } else {
+                  throw new Error("No data to process");
+                }
+
+                const args = buildFFmpegArgs(_mode, _settings as Parameters<typeof buildFFmpegArgs>[1], tmpIn, tmpOut);
+                console.log(`[job:${_jobId}] mode=${_mode} ffmpeg ${args.slice(0, 6).join(" ")} ...`);
+
+                await execFileAsync(ffmpegBin, args, {
+                  maxBuffer: 500 * 1024 * 1024,
+                  timeout: 30 * 60 * 1000,
+                } as object);
+
+                const job = _jobs.get(_jobId);
+                if (job) { job.status = "done"; job.outputPath = tmpOut; }
+                console.log(`[job:${_jobId}] ✅ done`);
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                console.error(`[job:${_jobId}] ❌ failed: ${msg.slice(0, 400)}`);
+                const job = _jobs.get(_jobId);
+                if (job) { job.status = "failed"; job.error = msg.slice(0, 400); }
+                ul(tmpIn).catch(() => {});
+                ul(tmpOut).catch(() => {});
+              } finally {
+                ul(tmpIn).catch(() => {});
+                if (sessionDir) rm(sessionDir, { recursive: true, force: true }).catch(() => {});
+              }
+            })().catch((err) => console.error("[enhance-async dev] unexpected:", err));
+
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ jobId }));
+          } catch (err) {
+            console.error("[/api/enhance-async dev]", err);
+            res.writeHead(500, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: String(err) }));
+          }
+          return;
+        }
+
+        // ── GET /api/job/:id ───────────────────────────────────────────────
+        if (pathname.startsWith("/api/job/") && !pathname.includes("/result") && method === "GET") {
+          const jobId = pathname.slice("/api/job/".length);
+          const job = _jobs.get(jobId);
+          if (!job) {
+            res.writeHead(404, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "Job not found" }));
+          } else {
+            res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+            res.end(JSON.stringify({ status: job.status, error: job.error }));
+          }
+          return;
+        }
+
+        // ── GET /api/job-result/:id ────────────────────────────────────────
+        if (pathname.startsWith("/api/job-result/") && method === "GET") {
+          const jobId = pathname.slice("/api/job-result/".length);
+          const job = _jobs.get(jobId);
+          if (!job || job.status !== "done" || !job.outputPath) {
+            res.writeHead(404, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "Result not ready" }));
+            return;
+          }
+          try {
+            const { readFile } = await import("fs/promises");
+            const buf = await readFile(job.outputPath);
+            const ext = job.ext;
+            const mime =
+              ext === "mp3" ? "audio/mpeg"
+              : ext === "gif" ? "image/gif"
+              : ext === "jpg" ? "image/jpeg"
+              : ext === "wav" ? "audio/wav"
+              : ext === "webm" ? "video/webm"
+              : "video/mp4";
+            const outputPath = job.outputPath;
+            setTimeout(() => {
+              import("fs/promises").then(({ unlink }) => unlink(outputPath).catch(() => {}));
+              _jobs.delete(jobId);
+            }, 30_000);
+            res.writeHead(200, {
+              "Content-Type": mime,
+              "Content-Length": String(buf.length),
+              "Content-Disposition": `attachment; filename="enhanced.${ext}"`,
+              "Cross-Origin-Resource-Policy": "cross-origin",
+            });
+            res.end(buf);
+          } catch {
+            res.writeHead(500, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "Failed to read result" }));
+          }
+          return;
+        }
+
+        // ── POST /api/enhance (sync fallback) ──────────────────────────────
+        if (pathname === "/api/enhance" && method === "POST") {
           try {
             const [
               { default: Busboy },
@@ -102,7 +303,6 @@ function cloudEnhanceDevPlugin(): Plugin {
               opts?: object,
             ) => Promise<{ stdout: string; stderr: string }>;
 
-            // Prefer system ffmpeg; fall back to ffmpeg-static
             let ffmpegBin = "ffmpeg";
             try {
               const { execFileSync } = await import("child_process");
@@ -144,8 +344,8 @@ function cloudEnhanceDevPlugin(): Plugin {
             });
 
             const { buildFFmpegArgs, outputExtForMode, mimeForExt } = await import(
-              "./server/build-ffmpeg-args.js"
-            ).catch(() => import("./server/build-ffmpeg-args.ts"));
+              "./server/build-ffmpeg-args.ts"
+            );
 
             const ext = outputExtForMode(mode);
             const ts = Date.now();
@@ -155,7 +355,6 @@ function cloudEnhanceDevPlugin(): Plugin {
 
             try {
               if (sessionId && totalChunks > 0) {
-                // Chunked upload: assemble from stored chunks
                 sessionDir = join(tmpdir(), "vep-sessions", sessionId);
                 const files = await readdir(sessionDir);
                 const chunkFiles = files.filter((f) => f.startsWith("chunk_")).sort();
@@ -163,7 +362,7 @@ function cloudEnhanceDevPlugin(): Plugin {
                 if (chunkFiles.length !== totalChunks) {
                   res.writeHead(400, { "Content-Type": "application/json" });
                   res.end(JSON.stringify({
-                    error: `توقعنا ${totalChunks} جزء، استُلم ${chunkFiles.length} فقط`,
+                    error: `Expected ${totalChunks} chunks, received ${chunkFiles.length}`,
                   }));
                   return;
                 }
@@ -178,7 +377,7 @@ function cloudEnhanceDevPlugin(): Plugin {
                 await writeFile(tmpIn, fileBuffer);
               } else {
                 res.writeHead(400, { "Content-Type": "application/json" });
-                res.end(JSON.stringify({ error: "لم يُرسل ملف أو جلسة رفع" }));
+                res.end(JSON.stringify({ error: "No file or session provided" }));
                 return;
               }
 
@@ -204,7 +403,7 @@ function cloudEnhanceDevPlugin(): Plugin {
               const msg = err instanceof Error ? err.message : String(err);
               console.error("[/api/enhance dev] FFmpeg error:", msg.slice(0, 1000));
               res.writeHead(500, { "Content-Type": "application/json" });
-              res.end(JSON.stringify({ error: "فشلت معالجة الفيديو", detail: msg.slice(0, 500) }));
+              res.end(JSON.stringify({ error: "Video processing failed", detail: msg.slice(0, 500) }));
             } finally {
               unlink(tmpIn).catch(() => {});
               unlink(tmpOut).catch(() => {});

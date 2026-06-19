@@ -1,11 +1,5 @@
 /**
  * serve.mjs — Production server for Video Audio Studio
- * Developer: Marwan Negm
- *
- * يخدم التطبيق المبني من dist/ مع الإعدادات الصحيحة لـ FFmpeg.wasm:
- * - COOP/COEP headers (مطلوبة لـ SharedArrayBuffer / Multi-Thread)
- * - MIME types صحيحة لملفات WASM
- * - Cache طويل لملفات WASM الكبيرة
  */
 
 import http from "http";
@@ -13,34 +7,106 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { fileURLToPath, pathToFileURL } from "url";
-import { spawn } from "child_process";
+import { spawn, execFileSync } from "child_process";
 import Busboy from "busboy";
 import { createRequire } from "module";
+import { mkdir, writeFile, readFile, unlink, readdir, rm } from "fs/promises";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const PORT = process.env.PORT || 8080;
+const PORT = process.env.PORT || 5000;
 const CLIENT_DIR = path.join(__dirname, "dist", "client");
 
-// ── ffmpeg-static: مسار الـ binary المدمج ─────────────────────────────────
+// ── ffmpeg-static ─────────────────────────────────────────────────────────
 const _require = createRequire(import.meta.url);
-function resolveFfmpegBin() {
-  // 1. ffmpeg-static package
+
+let FFMPEG_BIN = "ffmpeg";
+try {
+  execFileSync("ffmpeg", ["-version"], { stdio: "ignore" });
+  FFMPEG_BIN = "ffmpeg";
+} catch {
   try {
     const bin = _require("ffmpeg-static");
-    if (bin && fs.existsSync(bin)) return bin;
-  } catch {
-    /* ignore */
+    if (bin && fs.existsSync(bin)) FFMPEG_BIN = bin;
+  } catch { /* ignore */ }
+  if (process.env.FFMPEG_PATH && fs.existsSync(process.env.FFMPEG_PATH)) {
+    FFMPEG_BIN = process.env.FFMPEG_PATH;
   }
-  // 2. env override
-  if (process.env.FFMPEG_PATH && fs.existsSync(process.env.FFMPEG_PATH))
-    return process.env.FFMPEG_PATH;
-  // 3. system ffmpeg (Linux containers often have it via apt)
-  return "ffmpeg";
 }
-const FFMPEG_BIN = resolveFfmpegBin();
 console.log("  🎬  FFmpeg binary:", FFMPEG_BIN);
 
-// ── COOP/COEP — مطلوب لـ SharedArrayBuffer (Multi-Thread FFmpeg) ──────────
+// ── Async Job Queue ───────────────────────────────────────────────────────
+const _jobs = new Map();
+setInterval(() => {
+  const cutoff = Date.now() - 2 * 60 * 60 * 1000;
+  for (const [id, job] of _jobs) {
+    if (job.createdAt < cutoff) {
+      if (job.outputPath) unlink(job.outputPath).catch(() => {});
+      _jobs.delete(id);
+    }
+  }
+}, 15 * 60 * 1000);
+
+async function getBuildFFmpegArgs() {
+  return import(pathToFileURL(path.join(__dirname, "dist", "server", "build-ffmpeg-args.js")).href)
+    .catch(() => import("./server/build-ffmpeg-args.ts"));
+}
+
+async function runEnhanceJob(jobId, mode, settings, inputBuffer, sessionId, totalChunks, ext) {
+  const ts = Date.now();
+  const tmpIn = path.join(os.tmpdir(), `job-in-${ts}.mp4`);
+  const tmpOut = path.join(os.tmpdir(), `job-out-${ts}.${ext}`);
+  let sessionDir = null;
+
+  try {
+    if (sessionId && totalChunks > 0) {
+      sessionDir = path.join(os.tmpdir(), "vep-sessions", sessionId);
+      const files = await readdir(sessionDir);
+      const chunkFiles = files.filter((f) => f.startsWith("chunk_")).sort();
+      if (chunkFiles.length !== totalChunks) {
+        throw new Error(`Expected ${totalChunks} chunks, received ${chunkFiles.length}`);
+      }
+      const parts = [];
+      for (const cf of chunkFiles) parts.push(await readFile(path.join(sessionDir, cf)));
+      await writeFile(tmpIn, Buffer.concat(parts));
+      console.log(`[job:${jobId}] assembled ${chunkFiles.length} chunks → ${tmpIn}`);
+    } else if (inputBuffer) {
+      await writeFile(tmpIn, inputBuffer);
+    } else {
+      throw new Error("No data to process");
+    }
+
+    const { buildFFmpegArgs } = await getBuildFFmpegArgs();
+    const args = buildFFmpegArgs(mode, settings, tmpIn, tmpOut);
+    console.log(`[job:${jobId}] mode=${mode} ffmpeg ${args.slice(0, 6).join(" ")} ...`);
+
+    await new Promise((resolve, reject) => {
+      const proc = spawn(FFMPEG_BIN, args, { stdio: ["ignore", "ignore", "pipe"] });
+      let stderr = "";
+      proc.stderr.on("data", (d) => { stderr += d; });
+      proc.on("error", reject);
+      proc.on("close", (code) => {
+        if (code === 0) resolve();
+        else reject(new Error(`FFmpeg exited ${code}: ${stderr.slice(-500)}`));
+      });
+    });
+
+    const job = _jobs.get(jobId);
+    if (job) { job.status = "done"; job.outputPath = tmpOut; }
+    console.log(`[job:${jobId}] ✅ done`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[job:${jobId}] ❌ failed: ${msg.slice(0, 400)}`);
+    const job = _jobs.get(jobId);
+    if (job) { job.status = "failed"; job.error = msg.slice(0, 400); }
+    unlink(tmpIn).catch(() => {});
+    unlink(tmpOut).catch(() => {});
+  } finally {
+    unlink(tmpIn).catch(() => {});
+    if (sessionDir) rm(sessionDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+// ── COOP/COEP headers ─────────────────────────────────────────────────────
 const SECURITY_HEADERS = {
   "Cross-Origin-Opener-Policy": "same-origin",
   "Cross-Origin-Embedder-Policy": "require-corp",
@@ -71,20 +137,17 @@ const MIME = {
 };
 
 function getCacheControl(ext) {
-  if ([".wasm", ".woff2", ".woff", ".ttf"].includes(ext))
-    return "public, max-age=31536000, immutable";
+  if ([".wasm", ".woff2", ".woff", ".ttf"].includes(ext)) return "public, max-age=31536000, immutable";
   if (ext === ".html") return "no-cache";
   return "public, max-age=86400";
 }
 
-// ── Load SSR handler ───────────────────────────────────────────────────────
+// ── SSR handler ───────────────────────────────────────────────────────────
 let ssrHandler = null;
 async function getSSRHandler() {
   if (ssrHandler) return ssrHandler;
   try {
-    const mod = await import(
-      pathToFileURL(path.join(__dirname, "dist", "server", "server.js")).href
-    );
+    const mod = await import(pathToFileURL(path.join(__dirname, "dist", "server", "server.js")).href);
     ssrHandler = mod.default;
     return ssrHandler;
   } catch (e) {
@@ -93,7 +156,41 @@ async function getSSRHandler() {
   }
 }
 
-// ── Node → Web Request ─────────────────────────────────────────────────────
+// ── Static file ───────────────────────────────────────────────────────────
+function serveStatic(filePath, res) {
+  const ext = path.extname(filePath).toLowerCase();
+  fs.readFile(filePath, (err, data) => {
+    if (err) { res.writeHead(404); res.end("Not found"); return; }
+    res.writeHead(200, {
+      "Content-Type": MIME[ext] || "application/octet-stream",
+      "Cache-Control": getCacheControl(ext),
+      ...SECURITY_HEADERS,
+    });
+    res.end(data);
+  });
+}
+
+// ── Busboy helper: parse multipart ────────────────────────────────────────
+function parseMultipart(req) {
+  return new Promise((resolve, reject) => {
+    const bb = Busboy({ headers: req.headers });
+    const fields = {};
+    let fileBuffer = null;
+
+    bb.on("file", (_field, file) => {
+      const parts = [];
+      file.on("data", (d) => parts.push(d));
+      file.on("end", () => { fileBuffer = Buffer.concat(parts); });
+    });
+
+    bb.on("field", (name, value) => { fields[name] = value; });
+    bb.on("finish", () => resolve({ fields, fileBuffer }));
+    bb.on("error", reject);
+    req.pipe(bb);
+  });
+}
+
+// ── Node → Web Request (for SSR, small bodies only) ──────────────────────
 async function nodeToWebRequest(req) {
   const proto = req.socket?.encrypted ? "https" : "http";
   const host = req.headers.host || `localhost:${PORT}`;
@@ -113,12 +210,9 @@ async function nodeToWebRequest(req) {
   });
 }
 
-// ── Web Response → Node ────────────────────────────────────────────────────
 async function webToNodeResponse(webRes, res) {
   const headers = {};
-  webRes.headers.forEach((v, k) => {
-    headers[k] = v;
-  });
+  webRes.headers.forEach((v, k) => { headers[k] = v; });
   Object.assign(headers, SECURITY_HEADERS);
   res.writeHead(webRes.status ?? 200, headers);
   if (webRes.body) {
@@ -132,179 +226,144 @@ async function webToNodeResponse(webRes, res) {
   res.end();
 }
 
-// ── Static file ────────────────────────────────────────────────────────────
-function serveStatic(filePath, res) {
-  const ext = path.extname(filePath).toLowerCase();
-  fs.readFile(filePath, (err, data) => {
-    if (err) {
-      res.writeHead(404);
-      res.end("Not found");
-      return;
-    }
-    res.writeHead(200, {
-      "Content-Type": MIME[ext] || "application/octet-stream",
-      "Cache-Control": getCacheControl(ext),
-      ...SECURITY_HEADERS,
-    });
-    res.end(data);
-  });
-}
-
-// ── FFmpeg Cloud API: POST /api/enhance ────────────────────────────────────
-function parseMultipartFile(req, destPath) {
-  return new Promise((resolve, reject) => {
-    const contentType = req.headers["content-type"] || req.headers["Content-Type"];
-    if (!contentType?.startsWith("multipart/form-data")) {
-      reject(new Error("Request content-type must be multipart/form-data"));
-      return;
-    }
-
-    const busboy = Busboy({ headers: req.headers });
-    let fileSaved = false;
-
-    busboy.on("file", (fieldname, file, filename) => {
-      if (fieldname !== "file") {
-        file.resume();
-        return;
-      }
-
-      const writeStream = fs.createWriteStream(destPath);
-      file.pipe(writeStream);
-
-      writeStream.on("finish", () => {
-        fileSaved = true;
-        resolve();
-      });
-
-      writeStream.on("error", reject);
-      file.on("error", reject);
-    });
-
-    busboy.on("finish", () => {
-      if (!fileSaved) {
-        reject(new Error("No file field found in multipart request"));
-      }
-    });
-
-    busboy.on("error", reject);
-    req.pipe(busboy);
-  });
-}
-
-async function handleEnhanceApi(req, res) {
-  const tempId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  const inputPath = path.join(os.tmpdir(), `input-${tempId}.mp4`);
-  const outputPath = path.join(os.tmpdir(), `output-${tempId}.mp4`);
-
-  const cleanup = () => {
-    try {
-      fs.rmSync(inputPath, { force: true });
-    } catch (e) {
-      /* ignore */
-    }
-    try {
-      fs.rmSync(outputPath, { force: true });
-    } catch (e) {
-      /* ignore */
-    }
-  };
-
-  try {
-    await parseMultipartFile(req, inputPath);
-
-    if (!fs.existsSync(inputPath) || fs.statSync(inputPath).size === 0) {
-      res.writeHead(400, { "Content-Type": "application/json", ...SECURITY_HEADERS });
-      res.end(JSON.stringify({ error: "Uploaded file is empty or missing" }));
-      cleanup();
-      return;
-    }
-
-    const mode = req.headers["x-enhance-mode"] || "balanced";
-
-    const vfFilters = [
-      "hqdn3d=3:2:4:3.5",
-      "eq=brightness=0.03:contrast=1.1:saturation=1.25:gamma=0.95",
-      "unsharp=5:5:0.5",
-    ].join(",");
-
-    const ffmpegProcess = spawn(
-      FFMPEG_BIN,
-      [
-        "-y",
-        "-i",
-        inputPath,
-        "-vf",
-        vfFilters,
-        "-c:v",
-        "libx264",
-        "-preset",
-        "fast",
-        "-crf",
-        "20",
-        "-c:a",
-        "copy",
-        outputPath,
-      ],
-      { stdio: ["ignore", "ignore", "pipe"] },
-    );
-
-    let ffmpegStderr = "";
-    ffmpegProcess.stderr.on("data", (chunk) => {
-      ffmpegStderr += chunk.toString();
-    });
-
-    ffmpegProcess.on("error", (err) => {
-      console.error("FFmpeg spawn error:", err);
-      res.writeHead(500, { "Content-Type": "application/json", ...SECURITY_HEADERS });
-      res.end(JSON.stringify({ error: "Failed to start FFmpeg" }));
-      cleanup();
-    });
-
-    ffmpegProcess.on("close", (code) => {
-      if (code !== 0) {
-        console.error("FFmpeg failed with code", code, ffmpegStderr);
-        res.writeHead(500, { "Content-Type": "application/json", ...SECURITY_HEADERS });
-        res.end(JSON.stringify({ error: "FFmpeg failed", details: ffmpegStderr.slice(-1000) }));
-        cleanup();
-        return;
-      }
-
-      if (!fs.existsSync(outputPath)) {
-        res.writeHead(500, { "Content-Type": "application/json", ...SECURITY_HEADERS });
-        res.end(JSON.stringify({ error: "Output file not found" }));
-        cleanup();
-        return;
-      }
-
-      const data = fs.readFileSync(outputPath);
-      res.writeHead(200, {
-        "Content-Type": "video/mp4",
-        "Cache-Control": "no-cache",
-        ...SECURITY_HEADERS,
-      });
-      res.end(data);
-      cleanup();
-    });
-  } catch (e) {
-    console.error("Enhance API error:", e);
-    res.writeHead(500, { "Content-Type": "application/json", ...SECURITY_HEADERS });
-    res.end(JSON.stringify({ error: e instanceof Error ? e.message : "Internal Server Error" }));
-    cleanup();
-  }
-}
-
-// ── Main handler ───────────────────────────────────────────────────────────
+// ── Main handler ──────────────────────────────────────────────────────────
 const server = http.createServer(async (req, res) => {
   try {
     const urlPath = new URL(req.url, "http://x").pathname;
 
-    // API route أولاً
-    if (urlPath === "/api/enhance" && req.method === "POST") {
-      return handleEnhanceApi(req, res);
+    // ── POST /api/upload-chunk ──────────────────────────────────────────
+    if (urlPath === "/api/upload-chunk" && req.method === "POST") {
+      try {
+        const { fields, fileBuffer } = await parseMultipart(req);
+        const sessionId = fields.sessionId;
+        const chunkIndex = parseInt(fields.chunkIndex ?? "0", 10);
+
+        if (!sessionId || !fileBuffer) {
+          res.writeHead(400, { "Content-Type": "application/json", ...SECURITY_HEADERS });
+          res.end(JSON.stringify({ error: "Missing sessionId or chunk data" }));
+          return;
+        }
+
+        const sessionDir = path.join(os.tmpdir(), "vep-sessions", sessionId);
+        await mkdir(sessionDir, { recursive: true });
+        const chunkFile = path.join(sessionDir, `chunk_${String(chunkIndex).padStart(5, "0")}`);
+        await writeFile(chunkFile, fileBuffer);
+
+        res.writeHead(200, { "Content-Type": "application/json", ...SECURITY_HEADERS });
+        res.end(JSON.stringify({ ok: true, received: chunkIndex }));
+      } catch (err) {
+        console.error("[/api/upload-chunk]", err);
+        res.writeHead(500, { "Content-Type": "application/json", ...SECURITY_HEADERS });
+        res.end(JSON.stringify({ error: "Chunk upload failed" }));
+      }
+      return;
     }
 
-    const staticPath = path.join(CLIENT_DIR, urlPath);
+    // ── POST /api/enhance-async ─────────────────────────────────────────
+    if (urlPath === "/api/enhance-async" && req.method === "POST") {
+      try {
+        const { fields, fileBuffer } = await parseMultipart(req);
+        const mode = fields.mode || "enhance";
+        const sessionId = fields.sessionId || null;
+        const totalChunks = parseInt(fields.totalChunks ?? "0", 10);
+        let settings = {};
+        if (fields.settings) {
+          try { settings = JSON.parse(fields.settings); } catch { /* ignore */ }
+        }
 
+        const { outputExtForMode } = await getBuildFFmpegArgs();
+        const ext = typeof outputExtForMode === "function"
+          ? outputExtForMode(mode)
+          : (mode === "extract-audio" ? "mp3" : mode === "gif" ? "gif" : mode === "thumbnail" ? "jpg" : "mp4");
+
+        const jobId = crypto.randomUUID();
+        _jobs.set(jobId, { status: "processing", ext, createdAt: Date.now() });
+
+        runEnhanceJob(jobId, mode, settings, fileBuffer, sessionId, totalChunks, ext)
+          .catch((err) => console.error("[enhance-async] unexpected:", err));
+
+        res.writeHead(200, { "Content-Type": "application/json", ...SECURITY_HEADERS });
+        res.end(JSON.stringify({ jobId }));
+      } catch (err) {
+        console.error("[/api/enhance-async]", err);
+        res.writeHead(500, { "Content-Type": "application/json", ...SECURITY_HEADERS });
+        res.end(JSON.stringify({ error: String(err) }));
+      }
+      return;
+    }
+
+    // ── GET /api/job/:id ────────────────────────────────────────────────
+    if (urlPath.startsWith("/api/job/") && !urlPath.includes("/result") && req.method === "GET") {
+      const jobId = urlPath.slice("/api/job/".length);
+      const job = _jobs.get(jobId);
+      if (!job) {
+        res.writeHead(404, { "Content-Type": "application/json", ...SECURITY_HEADERS });
+        res.end(JSON.stringify({ error: "Job not found" }));
+      } else {
+        res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store", ...SECURITY_HEADERS });
+        res.end(JSON.stringify({ status: job.status, error: job.error }));
+      }
+      return;
+    }
+
+    // ── GET /api/job-result/:id ─────────────────────────────────────────
+    if (urlPath.startsWith("/api/job-result/") && req.method === "GET") {
+      const jobId = urlPath.slice("/api/job-result/".length);
+      const job = _jobs.get(jobId);
+      if (!job || job.status !== "done" || !job.outputPath) {
+        res.writeHead(404, { "Content-Type": "application/json", ...SECURITY_HEADERS });
+        res.end(JSON.stringify({ error: "Result not ready" }));
+        return;
+      }
+      try {
+        const buf = await readFile(job.outputPath);
+        const ext = job.ext;
+        const mime =
+          ext === "mp3" ? "audio/mpeg"
+          : ext === "gif" ? "image/gif"
+          : ext === "jpg" ? "image/jpeg"
+          : ext === "wav" ? "audio/wav"
+          : ext === "webm" ? "video/webm"
+          : "video/mp4";
+        const outputPath = job.outputPath;
+        setTimeout(() => { unlink(outputPath).catch(() => {}); _jobs.delete(jobId); }, 30_000);
+        res.writeHead(200, {
+          "Content-Type": mime,
+          "Content-Length": String(buf.length),
+          "Content-Disposition": `attachment; filename="enhanced.${ext}"`,
+          ...SECURITY_HEADERS,
+        });
+        res.end(buf);
+      } catch (err) {
+        res.writeHead(500, { "Content-Type": "application/json", ...SECURITY_HEADERS });
+        res.end(JSON.stringify({ error: "Failed to read result" }));
+      }
+      return;
+    }
+
+    // ── GET /api/videos/:name ───────────────────────────────────────────
+    if (urlPath.startsWith("/api/videos/") && req.method === "GET") {
+      const fileName = decodeURIComponent(urlPath.slice("/api/videos/".length));
+      if (fileName && !fileName.includes("..")) {
+        const filePath = path.join(__dirname, "uploads", fileName);
+        if (fs.existsSync(filePath)) {
+          const buf = fs.readFileSync(filePath);
+          const ext = fileName.split(".").pop()?.toLowerCase() ?? "";
+          const mime = MIME[`.${ext}`] || "application/octet-stream";
+          res.writeHead(200, {
+            "Content-Type": mime,
+            "Content-Disposition": `attachment; filename="${fileName.replace(/^[^-]+-/, "")}"`,
+            ...SECURITY_HEADERS,
+          });
+          res.end(buf);
+          return;
+        }
+        res.writeHead(404); res.end("Not found"); return;
+      }
+    }
+
+    // ── Static files ────────────────────────────────────────────────────
+    const staticPath = path.join(CLIENT_DIR, urlPath);
     if (
       urlPath !== "/" &&
       !urlPath.startsWith("/api/") &&
@@ -314,12 +373,12 @@ const server = http.createServer(async (req, res) => {
       return serveStatic(staticPath, res);
     }
 
+    // ── SSR handler ─────────────────────────────────────────────────────
     const handler = await getSSRHandler();
     if (!handler) {
       const idx = path.join(CLIENT_DIR, "index.html");
       if (fs.existsSync(idx)) return serveStatic(idx, res);
-      res.writeHead(503);
-      res.end("Building...");
+      res.writeHead(503); res.end("Building...");
       return;
     }
 
@@ -337,24 +396,15 @@ server.listen(PORT, "0.0.0.0", () => {
   console.log("");
   console.log("  ✅  Video Audio Studio");
   console.log(`  🌐  http://localhost:${PORT}`);
-  console.log("  👨‍💻  Developer: Marwan Negm");
-  console.log("");
-  console.log("  اضغط Ctrl+C للإيقاف");
   console.log("");
 });
 
 server.on("error", (err) => {
   if (err.code === "EADDRINUSE") {
-    console.error(`\n  ❌  المنفذ ${PORT} مستخدم — جرب: PORT=3001 node serve.mjs`);
+    console.error(`\n  ❌  Port ${PORT} in use`);
   } else console.error(err);
   process.exit(1);
 });
 
-process.on("SIGTERM", () => {
-  server.close();
-  process.exit(0);
-});
-process.on("SIGINT", () => {
-  server.close();
-  process.exit(0);
-});
+process.on("SIGTERM", () => { server.close(); process.exit(0); });
+process.on("SIGINT", () => { server.close(); process.exit(0); });
