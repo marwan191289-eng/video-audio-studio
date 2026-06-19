@@ -43,14 +43,19 @@ function cloudEnhanceDevPlugin(): Plugin {
             opts?: object,
           ) => Promise<{ stdout: string; stderr: string }>;
 
-          // Resolve ffmpeg binary: prefer ffmpeg-static, fallback to system
+          // Resolve ffmpeg binary: prefer system ffmpeg, fallback to ffmpeg-static
           let ffmpegBin = "ffmpeg";
           try {
-            const _cjsReq = createRequire(import.meta.url);
-            const bin = _cjsReq("ffmpeg-static") as string;
-            if (bin && existsSync(bin)) ffmpegBin = bin;
+            const { execFileSync } = await import("child_process");
+            execFileSync("ffmpeg", ["-version"], { stdio: "ignore" });
           } catch {
-            /* use system ffmpeg */
+            try {
+              const _cjsReq = createRequire(import.meta.url);
+              const bin = _cjsReq("ffmpeg-static") as string;
+              if (bin && existsSync(bin)) ffmpegBin = bin;
+            } catch {
+              /* use system ffmpeg anyway */
+            }
           }
 
           // Parse multipart form data

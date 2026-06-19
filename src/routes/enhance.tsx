@@ -43,10 +43,12 @@ import {
 //  Smart Mode Thresholds
 // --------------------------------------------------------
 const DEFAULT_SMART_LIMITS = {
-  maxLocalMB: 25,
+  maxLocalMB: 500,
   maxLocalResolution: 1080,
   maxLocalDuration: 60,
 };
+
+const MAX_CLOUD_MB = 95;
 
 export const Route = createFileRoute("/enhance")({
   head: () => ({
@@ -716,6 +718,12 @@ function EnhancePage() {
       return;
     }
 
+    const fileMB = file.size / (1024 * 1024);
+    if (fileMB > MAX_CLOUD_MB) {
+      showToast(`الملف كبير جداً للمعالجة السحابية (${fileMB.toFixed(0)} MB). الحد الأقصى ${MAX_CLOUD_MB} MB. استخدم المعالجة المحلية.`, "err");
+      return;
+    }
+
     setBusy(true);
     setProgress(0);
     setOutputUrl(null);
@@ -724,7 +732,7 @@ function EnhancePage() {
 
     try {
       appendLog(`☁️ بدء المعالجة السحابية — وضع: ${mode}`);
-      appendLog(`📤 جاري رفع الملف (${(file.size / 1024 / 1024).toFixed(1)} MB)...`);
+      appendLog(`📤 جاري رفع الملف (${fileMB.toFixed(1)} MB)...`);
 
       // Collect mode-specific settings
       const modeSettings: Record<string, unknown> = {};

@@ -215,17 +215,22 @@ export default {
         const { createRequire } = await import("module");
         const execFileAsync = promisify(execFile);
 
-        // Resolve ffmpeg binary: ffmpeg-static → env → system
-        const _req = createRequire(import.meta.url);
+        // Resolve ffmpeg binary: prefer system ffmpeg, fallback to ffmpeg-static
         let ffmpegBin = "ffmpeg";
         try {
-          const bin: string = _req("ffmpeg-static");
-          if (bin && ex(bin)) ffmpegBin = bin;
+          const { execFileSync } = await import("child_process");
+          execFileSync("ffmpeg", ["-version"], { stdio: "ignore" });
         } catch {
-          /* use system ffmpeg */
-        }
-        if (ffmpegBin === "ffmpeg" && process.env.FFMPEG_PATH && ex(process.env.FFMPEG_PATH)) {
-          ffmpegBin = process.env.FFMPEG_PATH;
+          const _req = createRequire(import.meta.url);
+          try {
+            const bin: string = _req("ffmpeg-static");
+            if (bin && ex(bin)) ffmpegBin = bin;
+          } catch {
+            /* use system ffmpeg anyway */
+          }
+          if (process.env.FFMPEG_PATH && ex(process.env.FFMPEG_PATH)) {
+            ffmpegBin = process.env.FFMPEG_PATH;
+          }
         }
 
         const { buildFFmpegArgs, outputExtForMode, mimeForExt } = await import(
