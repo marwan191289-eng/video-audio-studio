@@ -43,3 +43,8 @@ externalPort = 3000
 deploymentTarget = "static"
 build = ["bun", "run", "build"]
 publicDir = "dist/public"
+
+[userenv]
+
+[userenv.shared]
+VITE_RAILWAY_API_URL = "https://video-audio-studio-production.up.railway.app"
