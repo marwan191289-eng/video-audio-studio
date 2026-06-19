@@ -43,12 +43,12 @@ import {
 //  Smart Mode Thresholds
 // --------------------------------------------------------
 const DEFAULT_SMART_LIMITS = {
-  maxLocalMB: 500,
+  maxLocalMB: 25,
   maxLocalResolution: 1080,
   maxLocalDuration: 60,
 };
 
-const MAX_CLOUD_MB = 95;
+const CHUNK_SIZE = 45 * 1024 * 1024; // 45 MB per chunk — safely under any proxy limit
 
 export const Route = createFileRoute("/enhance")({
   head: () => ({
@@ -719,10 +719,6 @@ function EnhancePage() {
     }
 
     const fileMB = file.size / (1024 * 1024);
-    if (fileMB > MAX_CLOUD_MB) {
-      showToast(`الملف كبير جداً للمعالجة السحابية (${fileMB.toFixed(0)} MB). الحد الأقصى ${MAX_CLOUD_MB} MB. استخدم المعالجة المحلية.`, "err");
-      return;
-    }
 
     setBusy(true);
     setProgress(0);
@@ -732,7 +728,6 @@ function EnhancePage() {
 
     try {
       appendLog(`☁️ بدء المعالجة السحابية — وضع: ${mode}`);
-      appendLog(`📤 جاري رفع الملف (${fileMB.toFixed(1)} MB)...`);
 
       // Collect mode-specific settings
       const modeSettings: Record<string, unknown> = {};
@@ -773,27 +768,63 @@ function EnhancePage() {
         modeSettings.gamma2 = gamma2;
       }
 
-      const form = new FormData();
-      form.append("file", file);
-      form.append("mode", mode);
-      form.append("settings", JSON.stringify(modeSettings));
-
-      // ── Smooth animated progress using fetch() ────────────────────────────
-      // Phase 1 (0→55%): animate while uploading + server processing
-      // Phase 2 (55→92%): animate while downloading response body
-      // Phase 3: jump to 100% on completion
-      let progressTimer: ReturnType<typeof setInterval> | null = setInterval(() => {
-        setProgress((p) => {
-          if (p < 55) return +(p + 2.5).toFixed(1);
-          return p;
-        });
-      }, 300);
-
       let res: Response;
-      try {
+
+      if (file.size > CHUNK_SIZE) {
+        // ── Chunked upload for large files ─────────────────────────────────
+        const sessionId = crypto.randomUUID();
+        const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+        appendLog(`📦 الملف كبير (${fileMB.toFixed(1)} MB) — رفع ${totalChunks} جزء بحجم 45 MB لكل جزء...`);
+
+        for (let i = 0; i < totalChunks; i++) {
+          const start = i * CHUNK_SIZE;
+          const end = Math.min(start + CHUNK_SIZE, file.size);
+          const chunk = file.slice(start, end);
+
+          const chunkForm = new FormData();
+          chunkForm.append("sessionId", sessionId);
+          chunkForm.append("chunkIndex", String(i));
+          chunkForm.append("chunk", chunk, "chunk");
+
+          const chunkRes = await fetch("/api/upload-chunk", { method: "POST", body: chunkForm });
+          if (!chunkRes.ok) {
+            const errText = await chunkRes.text().catch(() => `HTTP ${chunkRes.status}`);
+            throw new Error(`فشل رفع الجزء ${i + 1}/${totalChunks}: ${errText}`);
+          }
+
+          const uploadPct = Math.round(((i + 1) / totalChunks) * 45);
+          setProgress(uploadPct);
+          appendLog(`📤 الجزء ${i + 1}/${totalChunks} — ${((end) / 1024 / 1024).toFixed(0)} MB`);
+        }
+
+        appendLog("⚙️ جاري التجميع والمعالجة على السيرفر...");
+        setProgress(50);
+
+        const form = new FormData();
+        form.append("sessionId", sessionId);
+        form.append("totalChunks", String(totalChunks));
+        form.append("mode", mode);
+        form.append("settings", JSON.stringify(modeSettings));
+
         res = await fetch("/api/enhance", { method: "POST", body: form });
-      } finally {
-        if (progressTimer) { clearInterval(progressTimer); progressTimer = null; }
+      } else {
+        // ── Direct upload for small files ──────────────────────────────────
+        appendLog(`📤 جاري رفع الملف (${fileMB.toFixed(1)} MB)...`);
+
+        let progressTimer: ReturnType<typeof setInterval> | null = setInterval(() => {
+          setProgress((p) => { if (p < 45) return +(p + 2.5).toFixed(1); return p; });
+        }, 300);
+
+        const form = new FormData();
+        form.append("file", file);
+        form.append("mode", mode);
+        form.append("settings", JSON.stringify(modeSettings));
+
+        try {
+          res = await fetch("/api/enhance", { method: "POST", body: form });
+        } finally {
+          if (progressTimer) { clearInterval(progressTimer); progressTimer = null; }
+        }
       }
 
       if (!res.ok) {

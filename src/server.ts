@@ -183,39 +183,65 @@ export default {
         });
     }
 
-    // ── Cloud Enhance API ────────────────────────────────────────────────────
-    if (pathname === "/api/enhance" && request.method === "POST") {
+    // ── Chunk Upload API ─────────────────────────────────────────────────────
+    if (pathname === "/api/upload-chunk" && request.method === "POST") {
       try {
         const formData = await request.formData();
-        const videoFile = formData.get("file");
-        if (!videoFile || !(videoFile instanceof File)) {
-          return new Response(JSON.stringify({ error: "لم يتم إرسال ملف فيديو" }), {
+        const sessionId = formData.get("sessionId") as string;
+        const chunkIndex = parseInt(formData.get("chunkIndex") as string, 10);
+        const chunkFile = formData.get("chunk");
+
+        if (!sessionId || isNaN(chunkIndex) || !(chunkFile instanceof File)) {
+          return new Response(JSON.stringify({ error: "Missing sessionId, chunkIndex, or chunk" }), {
             status: 400,
             headers: { "Content-Type": "application/json" },
           });
         }
 
+        const { mkdir, writeFile: wf } = await import("fs/promises");
+        const { tmpdir } = await import("os");
+        const { join: pj } = await import("path");
+
+        const sessionDir = pj(tmpdir(), "vep-sessions", sessionId);
+        await mkdir(sessionDir, { recursive: true });
+        const chunkPath = pj(sessionDir, `chunk_${String(chunkIndex).padStart(5, "0")}`);
+        await wf(chunkPath, Buffer.from(await chunkFile.arrayBuffer()));
+
+        return new Response(JSON.stringify({ ok: true, received: chunkIndex }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error("[/api/upload-chunk]", msg);
+        return new Response(JSON.stringify({ error: "Chunk upload failed" }), {
+          status: 500,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+    }
+
+    // ── Cloud Enhance API ────────────────────────────────────────────────────
+    if (pathname === "/api/enhance" && request.method === "POST") {
+      try {
+        const formData = await request.formData();
         const mode = (formData.get("mode") as string) || "enhance";
         let settings: Record<string, unknown> = {};
         const settingsRaw = formData.get("settings");
         if (settingsRaw && typeof settingsRaw === "string") {
-          try {
-            settings = JSON.parse(settingsRaw) as Record<string, unknown>;
-          } catch {
-            /* ignore */
-          }
+          try { settings = JSON.parse(settingsRaw) as Record<string, unknown>; } catch { /* ignore */ }
         }
 
         const { execFile } = await import("child_process");
         const { promisify } = await import("util");
-        const { writeFile: wf, unlink: ul, readFile: rf } = await import("fs/promises");
+        const { writeFile: wf, unlink: ul, readFile: rf, readdir, rm } = await import("fs/promises");
         const { existsSync: ex } = await import("fs");
         const { tmpdir } = await import("os");
         const { join: pj } = await import("path");
         const { createRequire } = await import("module");
         const execFileAsync = promisify(execFile);
 
-        // Resolve ffmpeg binary: prefer system ffmpeg, fallback to ffmpeg-static
+        // Prefer system ffmpeg; fall back to ffmpeg-static
         let ffmpegBin = "ffmpeg";
         try {
           const { execFileSync } = await import("child_process");
@@ -225,9 +251,7 @@ export default {
           try {
             const bin: string = _req("ffmpeg-static");
             if (bin && ex(bin)) ffmpegBin = bin;
-          } catch {
-            /* use system ffmpeg anyway */
-          }
+          } catch { /* keep "ffmpeg" */ }
           if (process.env.FFMPEG_PATH && ex(process.env.FFMPEG_PATH)) {
             ffmpegBin = process.env.FFMPEG_PATH;
           }
@@ -241,16 +265,48 @@ export default {
         const ts = Date.now();
         const tmpIn = pj(tmpdir(), `cloud-in-${ts}.mp4`);
         const tmpOut = pj(tmpdir(), `cloud-out-${ts}.${ext}`);
+        let sessionDir: string | null = null;
 
         try {
-          await wf(tmpIn, Buffer.from(await videoFile.arrayBuffer()));
+          const sessionId = formData.get("sessionId") as string | null;
+          const totalChunks = parseInt((formData.get("totalChunks") as string) ?? "0", 10);
+
+          if (sessionId && totalChunks > 0) {
+            // Chunked upload: assemble from stored chunks
+            sessionDir = pj(tmpdir(), "vep-sessions", sessionId);
+            const files = await readdir(sessionDir);
+            const chunkFiles = files.filter((f) => f.startsWith("chunk_")).sort();
+
+            if (chunkFiles.length !== totalChunks) {
+              return new Response(JSON.stringify({
+                error: `توقعنا ${totalChunks} جزء، استُلم ${chunkFiles.length}`,
+              }), { status: 400, headers: { "Content-Type": "application/json" } });
+            }
+
+            const parts: Buffer[] = [];
+            for (const cf of chunkFiles) {
+              parts.push(await rf(pj(sessionDir, cf)));
+            }
+            await wf(tmpIn, Buffer.concat(parts));
+            console.log(`[/api/enhance] assembled ${chunkFiles.length} chunks → ${tmpIn}`);
+          } else {
+            // Direct upload (small file)
+            const videoFile = formData.get("file");
+            if (!videoFile || !(videoFile instanceof File)) {
+              return new Response(JSON.stringify({ error: "لم يُرسل ملف أو جلسة رفع" }), {
+                status: 400,
+                headers: { "Content-Type": "application/json" },
+              });
+            }
+            await wf(tmpIn, Buffer.from(await videoFile.arrayBuffer()));
+          }
 
           const args = buildFFmpegArgs(mode, settings as Parameters<typeof buildFFmpegArgs>[1], tmpIn, tmpOut);
           console.log(`[/api/enhance] mode=${mode} ffmpeg`, args.join(" "));
 
           await execFileAsync(ffmpegBin, args, {
             maxBuffer: 500 * 1024 * 1024,
-            timeout: 5 * 60 * 1000,
+            timeout: 15 * 60 * 1000,
           } as object);
 
           const outBuf = await rf(tmpOut);
@@ -268,6 +324,7 @@ export default {
         } finally {
           ul(tmpIn).catch(() => {});
           ul(tmpOut).catch(() => {});
+          if (sessionDir) rm(sessionDir, { recursive: true, force: true }).catch(() => {});
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
