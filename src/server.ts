@@ -195,6 +195,17 @@ export default {
           });
         }
 
+        const mode = (formData.get("mode") as string) || "enhance";
+        let settings: Record<string, unknown> = {};
+        const settingsRaw = formData.get("settings");
+        if (settingsRaw && typeof settingsRaw === "string") {
+          try {
+            settings = JSON.parse(settingsRaw) as Record<string, unknown>;
+          } catch {
+            /* ignore */
+          }
+        }
+
         const { execFile } = await import("child_process");
         const { promisify } = await import("util");
         const { writeFile: wf, unlink: ul, readFile: rf } = await import("fs/promises");
@@ -217,29 +228,35 @@ export default {
           ffmpegBin = process.env.FFMPEG_PATH;
         }
 
-        const tmpIn = pj(tmpdir(), `enhance-in-${Date.now()}.mp4`);
-        const tmpOut = pj(tmpdir(), `enhance-out-${Date.now()}.mp4`);
+        const { buildFFmpegArgs, outputExtForMode, mimeForExt } = await import(
+          "../server/build-ffmpeg-args.js"
+        ).catch(() => import("../server/build-ffmpeg-args.ts"));
+
+        const ext = outputExtForMode(mode);
+        const ts = Date.now();
+        const tmpIn = pj(tmpdir(), `cloud-in-${ts}.mp4`);
+        const tmpOut = pj(tmpdir(), `cloud-out-${ts}.${ext}`);
 
         try {
           await wf(tmpIn, Buffer.from(await videoFile.arrayBuffer()));
-          await execFileAsync(ffmpegBin, [
-            "-y",
-            "-i", tmpIn,
-            "-vf",
-            "hqdn3d=3:2:4:3.5,eq=brightness=0.03:contrast=1.1:saturation=1.25:gamma=0.95,unsharp=5:5:0.5",
-            "-c:v", "libx264",
-            "-preset", "fast",
-            "-crf", "20",
-            "-c:a", "copy",
-            tmpOut,
-          ]);
+
+          const args = buildFFmpegArgs(mode, settings as Parameters<typeof buildFFmpegArgs>[1], tmpIn, tmpOut);
+          console.log(`[/api/enhance] mode=${mode} ffmpeg`, args.join(" "));
+
+          await execFileAsync(ffmpegBin, args, {
+            maxBuffer: 500 * 1024 * 1024,
+            timeout: 5 * 60 * 1000,
+          } as object);
+
           const outBuf = await rf(tmpOut);
           const ab = outBuf.buffer.slice(outBuf.byteOffset, outBuf.byteOffset + outBuf.byteLength);
+          const mime = mimeForExt(ext);
+
           return new Response(ab, {
             status: 200,
             headers: {
-              "Content-Type": "video/mp4",
-              "Content-Disposition": 'attachment; filename="enhanced.mp4"',
+              "Content-Type": mime,
+              "Content-Disposition": `attachment; filename="enhanced.${ext}"`,
               "Cross-Origin-Resource-Policy": "cross-origin",
             },
           });
@@ -250,7 +267,7 @@ export default {
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.error("[/api/enhance]", msg);
-        return new Response(JSON.stringify({ error: "فشلت المعالجة عبر السيرفر", detail: msg }), {
+        return new Response(JSON.stringify({ error: "فشلت المعالجة عبر السيرفر", detail: msg.slice(0, 500) }), {
           status: 500,
           headers: { "Content-Type": "application/json" },
         });

@@ -37,7 +37,7 @@ export const listVideos = createServerFn({ method: "GET" }).handler(async () => 
 });
 
 export const saveVideo = createServerFn({ method: "POST" })
-  .inputValidator(
+  .validator(
     z.object({
       name: z.string(),
       fileData: z.string(),
@@ -71,7 +71,7 @@ export const saveVideo = createServerFn({ method: "POST" })
   });
 
 export const deleteVideo = createServerFn({ method: "POST" })
-  .inputValidator(z.object({ id: z.string(), storagePath: z.string() }))
+  .validator(z.object({ id: z.string(), storagePath: z.string() }))
   .handler(async ({ data }) => {
     const db = await getDb();
     const { processedVideos } = await import("../../../shared/schema");
@@ -88,7 +88,7 @@ export const deleteVideo = createServerFn({ method: "POST" })
   });
 
 export const getVideoDownloadPath = createServerFn({ method: "POST" })
-  .inputValidator(z.object({ storagePath: z.string() }))
+  .validator(z.object({ storagePath: z.string() }))
   .handler(async ({ data }) => {
     return { url: `/api/videos/${encodeURIComponent(data.storagePath)}` };
   });

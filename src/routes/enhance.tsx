@@ -720,43 +720,116 @@ function EnhancePage() {
     setProgress(0);
     setOutputUrl(null);
     setOutputBlob(null);
+    setLog("");
 
     try {
-      showToast("جاري الرفع والمعالجة عبر السيرفر...", "ok");
+      appendLog(`☁️ بدء المعالجة السحابية — وضع: ${mode}`);
+      appendLog(`📤 جاري رفع الملف (${(file.size / 1024 / 1024).toFixed(1)} MB)...`);
 
-      // Simulate upload progress
-      const progressTimer = setInterval(() => {
-        setProgress((p) => (p >= 80 ? p : p + 5));
-      }, 400);
+      // Collect mode-specific settings
+      const modeSettings: Record<string, unknown> = {};
+      if (mode === "enhance") {
+        modeSettings.brightness = brightness;
+        modeSettings.contrast = contrast;
+        modeSettings.saturation = saturation;
+        modeSettings.sharpness = sharpness;
+        modeSettings.gamma = gamma;
+        modeSettings.denoiseFilter = denoiseFilter;
+      } else if (mode === "auto-enhance") {
+        modeSettings.autoLevel = autoLevel;
+      } else if (mode === "denoise") {
+        modeSettings.denoiseStrength = denoiseStrength;
+      } else if (mode === "compress") {
+        modeSettings.crf = crf;
+      } else if (mode === "trim") {
+        modeSettings.trimStart = trimStart;
+        modeSettings.trimEnd = trimEnd;
+      } else if (mode === "speed") {
+        modeSettings.speed = speed;
+      } else if (mode === "rotate") {
+        modeSettings.rotateDir = rotateDir;
+      } else if (mode === "upscale") {
+        modeSettings.upscaleRes = upscaleRes;
+      } else if (mode === "fps") {
+        modeSettings.targetFps = targetFps;
+      } else if (mode === "gif") {
+        modeSettings.gifFps = gifFps;
+        modeSettings.gifWidth = gifWidth;
+      } else if (mode === "thumbnail") {
+        modeSettings.thumbAt = thumbAt;
+      } else if (mode === "color-grade") {
+        modeSettings.colorPreset = colorPreset;
+        modeSettings.brightness2 = brightness2;
+        modeSettings.contrast2 = contrast2;
+        modeSettings.saturation2 = saturation2;
+        modeSettings.gamma2 = gamma2;
+      }
 
       const form = new FormData();
       form.append("file", file);
       form.append("mode", mode);
+      form.append("settings", JSON.stringify(modeSettings));
 
-      let res: Response;
-      try {
-        res = await fetch("/api/enhance", { method: "POST", body: form });
-      } finally {
-        clearInterval(progressTimer);
+      // Track upload progress via XMLHttpRequest for accurate progress
+      const { blob: resultBlob, ok, statusText } = await new Promise<{
+        blob: Blob | null;
+        ok: boolean;
+        statusText: string;
+      }>((resolve) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", "/api/enhance");
+        xhr.responseType = "blob";
+
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) {
+            const pct = Math.round((e.loaded / e.total) * 60);
+            setProgress(pct);
+            if (pct % 20 === 0)
+              appendLog(`📤 رفع: ${pct}%`);
+          }
+        };
+
+        xhr.onprogress = () => {
+          setProgress((p) => Math.min(p + 2, 95));
+        };
+
+        xhr.onload = () => {
+          setProgress(100);
+          if (xhr.status >= 200 && xhr.status < 300) {
+            resolve({ blob: xhr.response as Blob, ok: true, statusText: "" });
+          } else {
+            resolve({ blob: null, ok: false, statusText: `HTTP ${xhr.status}` });
+          }
+        };
+
+        xhr.onerror = () => resolve({ blob: null, ok: false, statusText: "network error" });
+        xhr.send(form);
+      });
+
+      if (!ok || !resultBlob) {
+        throw new Error(statusText || "فشل طلب السيرفر");
       }
 
-      if (!res.ok) {
-        const errText = await res.text().catch(() => "");
-        throw new Error(errText || `HTTP ${res.status}`);
-      }
+      // Determine output extension from mode
+      const extMap: Partial<Record<Mode, string>> = {
+        "extract-audio": "mp3",
+        gif: "gif",
+        thumbnail: "jpg",
+      };
+      const ext = extMap[mode] ?? "mp4";
+      const outName = `cloud-${mode}-output.${ext}`;
 
-      setProgress(100);
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-
-      setOutputBlob(blob);
+      const url = URL.createObjectURL(resultBlob);
+      setOutputBlob(resultBlob);
       setOutputUrl(url);
-      setOutputName("cloud-output.mp4");
+      setOutputName(outName);
+      appendLog(`✅ اكتملت المعالجة السحابية بنجاح! (${(resultBlob.size / 1024 / 1024).toFixed(2)} MB)`);
       showToast("✓ تمت المعالجة عبر السيرفر!", "ok");
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      showToast("فشل الاتصال بالسيرفر: " + msg.slice(0, 80), "err");
       appendLog("❌ خطأ سحابي: " + msg);
+      showToast("فشل الاتصال بالسيرفر: " + msg.slice(0, 80), "err");
+      setShowLog(true);
     } finally {
       setBusy(false);
     }
