@@ -80,6 +80,113 @@ function ffmpegBuf(key: FFmpegFileKey, ...candidates: string[]): ArrayBuffer | n
 
 const R = (...parts: string[]) => join(process.cwd(), ...parts);
 
+// ── Async Job Queue ──────────────────────────────────────────────────────────
+
+interface EnhanceJob {
+  status: "processing" | "done" | "failed";
+  outputPath?: string;
+  ext: string;
+  error?: string;
+  createdAt: number;
+}
+
+const _jobs = new Map<string, EnhanceJob>();
+
+setInterval(() => {
+  const cutoff = Date.now() - 2 * 60 * 60 * 1000;
+  for (const [id, job] of _jobs) {
+    if (job.createdAt < cutoff) {
+      if (job.outputPath) {
+        import("fs/promises").then(({ unlink }) => unlink(job.outputPath!).catch(() => {}));
+      }
+      _jobs.delete(id);
+    }
+  }
+}, 15 * 60 * 1000);
+
+async function runEnhanceJob(
+  jobId: string,
+  mode: string,
+  settings: Record<string, unknown>,
+  inputBuffer: Buffer | null,
+  sessionId: string | null,
+  totalChunks: number,
+  ext: string,
+): Promise<void> {
+  const { execFile } = await import("child_process");
+  const { promisify } = await import("util");
+  const { writeFile: wf, readFile: rf, unlink: ul, readdir, rm } = await import("fs/promises");
+  const { existsSync: ex } = await import("fs");
+  const { tmpdir } = await import("os");
+  const { join: pj } = await import("path");
+  const { createRequire } = await import("module");
+  const execFileAsync = promisify(execFile);
+
+  let ffmpegBin = "ffmpeg";
+  try {
+    const { execFileSync } = await import("child_process");
+    execFileSync("ffmpeg", ["-version"], { stdio: "ignore" });
+  } catch {
+    const _req = createRequire(import.meta.url);
+    try {
+      const bin: string = _req("ffmpeg-static");
+      if (bin && ex(bin)) ffmpegBin = bin;
+    } catch { /* keep "ffmpeg" */ }
+    if (process.env.FFMPEG_PATH && ex(process.env.FFMPEG_PATH)) {
+      ffmpegBin = process.env.FFMPEG_PATH;
+    }
+  }
+
+  const { buildFFmpegArgs } = await import("../server/build-ffmpeg-args.js")
+    .catch(() => import("../server/build-ffmpeg-args.ts"));
+
+  const ts = Date.now();
+  const tmpIn = pj(tmpdir(), `job-in-${ts}.mp4`);
+  const tmpOut = pj(tmpdir(), `job-out-${ts}.${ext}`);
+  let sessionDir: string | null = null;
+
+  try {
+    if (sessionId && totalChunks > 0) {
+      sessionDir = pj(tmpdir(), "vep-sessions", sessionId);
+      const files = await readdir(sessionDir);
+      const chunkFiles = files.filter((f) => f.startsWith("chunk_")).sort();
+      if (chunkFiles.length !== totalChunks) {
+        throw new Error(`الأجزاء المطلوبة ${totalChunks} لكن تم استلام ${chunkFiles.length}`);
+      }
+      const parts: Buffer[] = [];
+      for (const cf of chunkFiles) parts.push(await rf(pj(sessionDir, cf)));
+      await wf(tmpIn, Buffer.concat(parts));
+      console.log(`[job:${jobId}] assembled ${chunkFiles.length} chunks → ${tmpIn}`);
+    } else if (inputBuffer) {
+      await wf(tmpIn, inputBuffer);
+    } else {
+      throw new Error("لا توجد بيانات للمعالجة");
+    }
+
+    const args = buildFFmpegArgs(mode, settings as Parameters<typeof buildFFmpegArgs>[1], tmpIn, tmpOut);
+    console.log(`[job:${jobId}] mode=${mode} ffmpeg ${args.slice(0, 6).join(" ")} ...`);
+
+    await execFileAsync(ffmpegBin, args, {
+      maxBuffer: 500 * 1024 * 1024,
+      timeout: 30 * 60 * 1000,
+    } as object);
+
+    const job = _jobs.get(jobId);
+    if (job) { job.status = "done"; job.outputPath = tmpOut; }
+    console.log(`[job:${jobId}] ✅ done`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[job:${jobId}] ❌ failed: ${msg.slice(0, 400)}`);
+    const job = _jobs.get(jobId);
+    if (job) { job.status = "failed"; job.error = msg.slice(0, 400); }
+    ul(tmpIn).catch(() => {});
+    ul(tmpOut).catch(() => {});
+  } finally {
+    ul(tmpIn).catch(() => {});
+    if (sessionDir) rm(sessionDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
 export default {
   async fetch(request: Request, env: unknown, ctx: unknown) {
     const url = new URL(request.url);
@@ -367,6 +474,110 @@ export default {
           });
         }
         return new Response("Not found", { status: 404 });
+      }
+    }
+
+    // ── /api/enhance-async — بدء معالجة خلفية، يرجع jobId فوراً ─────────────
+    if (pathname === "/api/enhance-async" && request.method === "POST") {
+      try {
+        const form = await request.formData();
+        const mode = (form.get("mode") as string) || "enhance";
+        const sessionId = form.get("sessionId") as string | null;
+        const totalChunks = parseInt((form.get("totalChunks") as string) ?? "0", 10);
+        let settings: Record<string, unknown> = {};
+        const raw = form.get("settings");
+        if (typeof raw === "string") { try { settings = JSON.parse(raw); } catch { /* ignore */ } }
+
+        let inputBuffer: Buffer | null = null;
+        if (!sessionId || !totalChunks) {
+          const videoFile = form.get("file");
+          if (videoFile instanceof File) {
+            inputBuffer = Buffer.from(await videoFile.arrayBuffer());
+          }
+        }
+
+        const { outputExtForMode } = await import("../server/build-ffmpeg-args.js")
+          .catch(() => import("../server/build-ffmpeg-args.ts"));
+        const ext: string = typeof outputExtForMode === "function"
+          ? outputExtForMode(mode)
+          : (mode === "extract-audio" ? "mp3" : mode === "gif" ? "gif" : mode === "thumbnail" ? "jpg" : "mp4");
+
+        const jobId = crypto.randomUUID();
+        _jobs.set(jobId, { status: "processing", ext, createdAt: Date.now() });
+
+        runEnhanceJob(jobId, mode, settings, inputBuffer, sessionId, totalChunks, ext)
+          .catch((err) => console.error("[enhance-async] unexpected:", err));
+
+        return new Response(JSON.stringify({ jobId }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return new Response(JSON.stringify({ error: msg }), {
+          status: 500,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+    }
+
+    // ── /api/job/:id — حالة الـ job ─────────────────────────────────────────
+    if (pathname.startsWith("/api/job/") && !pathname.includes("/result") && request.method === "GET") {
+      const jobId = pathname.slice("/api/job/".length);
+      const job = _jobs.get(jobId);
+      if (!job) {
+        return new Response(JSON.stringify({ error: "Job not found" }), {
+          status: 404,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ status: job.status, error: job.error }), {
+        status: 200,
+        headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+      });
+    }
+
+    // ── /api/job-result/:id — تحميل النتيجة ─────────────────────────────────
+    if (pathname.startsWith("/api/job-result/") && request.method === "GET") {
+      const jobId = pathname.slice("/api/job-result/".length);
+      const job = _jobs.get(jobId);
+      if (!job || job.status !== "done" || !job.outputPath) {
+        return new Response(JSON.stringify({ error: "Result not ready" }), {
+          status: 404,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      try {
+        const { readFile } = await import("fs/promises");
+        const buf = await readFile(job.outputPath);
+        const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+        const ext = job.ext;
+        const mime =
+          ext === "mp3" ? "audio/mpeg"
+          : ext === "gif" ? "image/gif"
+          : ext === "jpg" ? "image/jpeg"
+          : ext === "wav" ? "audio/wav"
+          : ext === "webm" ? "video/webm"
+          : "video/mp4";
+        const outputPath = job.outputPath;
+        setTimeout(() => {
+          import("fs/promises").then(({ unlink }) => unlink(outputPath).catch(() => {}));
+          _jobs.delete(jobId);
+        }, 30_000);
+        return new Response(ab, {
+          status: 200,
+          headers: {
+            "Content-Type": mime,
+            "Content-Disposition": `attachment; filename="enhanced.${ext}"`,
+            "Content-Length": String(buf.byteLength),
+            "Cross-Origin-Resource-Policy": "cross-origin",
+          },
+        });
+      } catch (err) {
+        return new Response(JSON.stringify({ error: "Failed to read result" }), {
+          status: 500,
+          headers: { "Content-Type": "application/json" },
+        });
       }
     }
 

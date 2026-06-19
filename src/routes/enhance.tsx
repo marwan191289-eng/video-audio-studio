@@ -769,9 +769,15 @@ function EnhancePage() {
       }
 
       let res: Response;
+      let progressTimer: ReturnType<typeof setInterval> | null = null;
+
+      // ── تجميع بيانات الطلب ───────────────────────────────────────────────
+      const asyncForm = new FormData();
+      asyncForm.append("mode", mode);
+      asyncForm.append("settings", JSON.stringify(modeSettings));
 
       if (file.size > CHUNK_SIZE) {
-        // ── Chunked upload for large files ──────────────────────────────────
+        // رفع مجزأ للملفات الكبيرة
         const sessionId   = crypto.randomUUID();
         const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
         appendLog(`📦 الملف كبير (${fileMB.toFixed(1)} MB) — رفع ${totalChunks} جزء إلى السيرفر...`);
@@ -792,51 +798,57 @@ function EnhancePage() {
             throw new Error(`فشل رفع الجزء ${i + 1}/${totalChunks}: ${errText}`);
           }
 
-          const uploadPct = Math.round(((i + 1) / totalChunks) * 45);
-          setProgress(uploadPct);
+          setProgress(Math.round(((i + 1) / totalChunks) * 38));
           appendLog(`📤 الجزء ${i + 1}/${totalChunks} — ${(end / 1024 / 1024).toFixed(0)} MB`);
         }
 
-        appendLog(`⚙️ جاري المعالجة على السيرفر...`);
-        setProgress(50);
-
-        let serverTimer: ReturnType<typeof setInterval> | null = setInterval(() => {
-          setProgress((p) => { if (p < 88) return +(p + 0.25).toFixed(2); return p; });
-        }, 1000);
-
-        const enhanceForm = new FormData();
-        enhanceForm.append("sessionId", sessionId);
-        enhanceForm.append("totalChunks", String(totalChunks));
-        enhanceForm.append("mode", mode);
-        enhanceForm.append("settings", JSON.stringify(modeSettings));
-
-        try {
-          res = await fetch("/api/enhance", {
-            method: "POST",
-            body: enhanceForm,
-          });
-        } finally {
-          if (serverTimer) { clearInterval(serverTimer); serverTimer = null; }
-        }
+        asyncForm.append("sessionId", sessionId);
+        asyncForm.append("totalChunks", String(totalChunks));
       } else {
-        // ── Direct upload for small files ──────────────────────────────────
-        appendLog(`📤 جاري رفع الملف (${fileMB.toFixed(1)} MB)...`);
-
-        let progressTimer: ReturnType<typeof setInterval> | null = setInterval(() => {
-          setProgress((p) => { if (p < 45) return +(p + 2.5).toFixed(1); return p; });
-        }, 300);
-
-        const form = new FormData();
-        form.append("file", file);
-        form.append("mode", mode);
-        form.append("settings", JSON.stringify(modeSettings));
-
-        try {
-          res = await fetch("/api/enhance", { method: "POST", body: form });
-        } finally {
-          if (progressTimer) { clearInterval(progressTimer); progressTimer = null; }
-        }
+        // رفع مباشر للملفات الصغيرة
+        appendLog(`📤 رفع الملف (${fileMB.toFixed(1)} MB)...`);
+        asyncForm.append("file", file);
       }
+
+      // ── إرسال الطلب للمعالجة الخلفية — يرجع jobId فوراً ─────────────────
+      appendLog(`🚀 بدء المعالجة على السيرفر...`);
+      setProgress(42);
+
+      const startRes = await fetch("/api/enhance-async", { method: "POST", body: asyncForm });
+      if (!startRes.ok) {
+        const errText = await startRes.text().catch(() => `HTTP ${startRes.status}`);
+        throw new Error(`فشل بدء المعالجة: ${errText}`);
+      }
+      const { jobId } = await startRes.json() as { jobId: string };
+      appendLog(`⚙️ المعالجة جارية في الخلفية (لن يحدث timeout)...`);
+      setProgress(48);
+
+      // ── Polling كل 5 ثوانٍ حتى تكتمل المعالجة (max 20 دقيقة) ────────────
+      progressTimer = setInterval(() => {
+        setProgress(p => Math.min(+(p + 0.15).toFixed(2), 88));
+      }, 2000);
+
+      try {
+        let polls = 0;
+        while (polls < 240) {
+          await new Promise<void>(r => setTimeout(r, 5000));
+          polls++;
+          const statusRes = await fetch(`/api/job/${jobId}`);
+          if (!statusRes.ok) continue;
+          const { status, error: jobErr } = await statusRes.json() as { status: string; error?: string };
+          if (polls % 6 === 0) appendLog(`⏳ انتظار... (${polls * 5}ث)`);
+          if (status === "done") { appendLog(`✅ اكتملت المعالجة!`); break; }
+          if (status === "failed") throw new Error(jobErr || "فشلت المعالجة على السيرفر");
+        }
+        if (polls >= 240) throw new Error("انتهت مدة الانتظار (20 دقيقة)");
+      } finally {
+        if (progressTimer) { clearInterval(progressTimer); progressTimer = null; }
+      }
+
+      // ── تنزيل النتيجة ──────────────────────────────────────────────────────
+      appendLog(`📥 جاري تنزيل الملف المُعالَج...`);
+      setProgress(90);
+      res = await fetch(`/api/job-result/${jobId}`);
 
       if (!res.ok) {
         let errMsg = `HTTP ${res.status}`;
@@ -845,7 +857,7 @@ function EnhancePage() {
       }
 
       appendLog("⚙️ السيرفر جاهز — جاري استلام الملف المُعالَج...");
-      setProgress(60);
+      setProgress(92);
 
       // Phase 2: stream the response body with real progress tracking
       const contentLength = parseInt(res.headers.get("Content-Length") ?? "0", 10);
