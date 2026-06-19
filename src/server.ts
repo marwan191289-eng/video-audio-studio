@@ -83,12 +83,13 @@ const R = (...parts: string[]) => join(process.cwd(), ...parts);
 // ── Async Job Queue ──────────────────────────────────────────────────────────
 
 interface EnhanceJob {
-  status: "processing" | "done" | "failed";
+  status: "processing" | "done" | "failed" | "cancelled";
   outputPath?: string;
   ext: string;
   error?: string;
   createdAt: number;
   progress?: number;
+  ffmpegProcess?: { kill(signal?: string): boolean };
 }
 
 const _jobs = new Map<string, EnhanceJob>();
@@ -196,24 +197,46 @@ async function runEnhanceJob(
       } catch { /* progress file not ready yet */ }
     }, 1000);
 
+    const { spawn: _spawnProc } = await import("child_process");
+    const child = _spawnProc(ffmpegBin, argsWithProgress, {
+      stdio: ["ignore", "ignore", "ignore"],
+    });
+    const jProc = _jobs.get(jobId);
+    if (jProc) jProc.ffmpegProcess = child;
+
     try {
-      await execFileAsync(ffmpegBin, argsWithProgress, {
-        maxBuffer: 500 * 1024 * 1024,
-        timeout: 30 * 60 * 1000,
-      } as object);
+      await new Promise<void>((resolve, reject) => {
+        child.on("close", (code: number | null) => {
+          const j = _jobs.get(jobId);
+          if (j?.status === "cancelled") { resolve(); return; }
+          if (code === 0) resolve();
+          else reject(new Error(`FFmpeg exited ${code}`));
+        });
+        child.on("error", (err: Error) => {
+          const j = _jobs.get(jobId);
+          if (j?.status === "cancelled") { resolve(); return; }
+          reject(err);
+        });
+      });
     } finally {
       clearInterval(progressInterval);
       ul(progressFile).catch(() => {});
     }
 
     const job = _jobs.get(jobId);
-    if (job) { job.status = "done"; job.outputPath = tmpOut; job.progress = 100; }
-    console.log(`[job:${jobId}] ✅ done`);
+    if (job && job.status !== "cancelled") {
+      job.status = "done"; job.outputPath = tmpOut; job.progress = 100;
+    }
+    if (job?.status !== "cancelled") console.log(`[job:${jobId}] ✅ done`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`[job:${jobId}] ❌ failed: ${msg.slice(0, 400)}`);
     const job = _jobs.get(jobId);
-    if (job) { job.status = "failed"; job.error = msg.slice(0, 400); }
+    if (job?.status === "cancelled") {
+      console.log(`[job:${jobId}] 🚫 cancelled`);
+    } else {
+      console.error(`[job:${jobId}] ❌ failed: ${msg.slice(0, 400)}`);
+      if (job) { job.status = "failed"; job.error = msg.slice(0, 400); }
+    }
     ul(tmpIn).catch(() => {});
     ul(tmpOut).catch(() => {});
   } finally {
@@ -569,6 +592,27 @@ export default {
       return new Response(JSON.stringify({ status: job.status, error: job.error, progress: job.progress ?? 0 }), {
         status: 200,
         headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+      });
+    }
+
+    // ── DELETE /api/job/:id — Cancel ─────────────────────────────────────────
+    if (pathname.startsWith("/api/job/") && !pathname.includes("/result") && request.method === "DELETE") {
+      const jobId = pathname.slice("/api/job/".length);
+      const job = _jobs.get(jobId);
+      if (!job || job.status !== "processing") {
+        return new Response(JSON.stringify({ error: "Job not found or not processing" }), {
+          status: 404,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      job.status = "cancelled";
+      if (job.ffmpegProcess) {
+        try { job.ffmpegProcess.kill("SIGTERM"); } catch { /* ignore */ }
+        setTimeout(() => { try { job.ffmpegProcess?.kill("SIGKILL"); } catch { /* ignore */ } }, 2000);
+      }
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
       });
     }
 

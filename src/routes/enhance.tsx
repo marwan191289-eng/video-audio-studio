@@ -33,8 +33,8 @@ import {
   CheckCircle2,
   AlertCircle,
   Settings2,
-  Sparkles,
   X,
+  Sparkles,
   Star,
   Check,
 } from "lucide-react";
@@ -222,6 +222,8 @@ function EnhancePage() {
   const [loadingFFmpeg, setLoadingFFmpeg] = useState(false);
   const [showLog, setShowLog] = useState(false);
   const [toast, setToast] = useState<{ msg: string; type: "ok" | "err" } | null>(null);
+  const [cloudJobId, setCloudJobId] = useState<string | null>(null);
+  const cancelCloudRef = useRef(false);
   const [dragOver, setDragOver] = useState(false);
 
   // Smart Mode
@@ -725,6 +727,7 @@ function EnhancePage() {
     setOutputUrl(null);
     setOutputBlob(null);
     setLog("");
+    cancelCloudRef.current = false;
 
     try {
       appendLog(`☁️ بدء المعالجة السحابية — وضع: ${mode}`);
@@ -820,6 +823,7 @@ function EnhancePage() {
         throw new Error(`فشل بدء المعالجة: ${errText}`);
       }
       const { jobId } = await startRes.json() as { jobId: string };
+      setCloudJobId(jobId);
       appendLog(`⚙️ المعالجة جارية في الخلفية (لن يحدث timeout)...`);
       setProgress(48);
 
@@ -833,12 +837,15 @@ function EnhancePage() {
         let polls = 0;
         while (polls < 240) {
           await new Promise<void>(r => setTimeout(r, 5000));
+          // Check if user clicked cancel while waiting
+          if (cancelCloudRef.current) throw new Error("CANCELLED_BY_USER");
           polls++;
           const statusRes = await fetch(`/api/job/${jobId}`);
           if (!statusRes.ok) continue;
           const { status, error: jobErr, progress: serverProgress } = await statusRes.json() as {
             status: string; error?: string; progress?: number;
           };
+          if (status === "cancelled") throw new Error("CANCELLED_BY_USER");
           // Use real server progress when available (maps 0–100 → 48–88 display range)
           if (typeof serverProgress === "number" && serverProgress > 0 && serverProgress <= 100) {
             const displayPct = 48 + Math.round(serverProgress * 0.4);
@@ -936,12 +943,24 @@ function EnhancePage() {
       showToast("✓ تمت المعالجة عبر السيرفر!", "ok");
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      appendLog("❌ خطأ سحابي: " + msg);
-      showToast("فشل الاتصال بالسيرفر: " + msg.slice(0, 80), "err");
-      setShowLog(true);
+      if (msg === "CANCELLED_BY_USER") {
+        appendLog("🚫 تم إلغاء المعالجة.");
+      } else {
+        appendLog("❌ خطأ سحابي: " + msg);
+        showToast("فشل الاتصال بالسيرفر: " + msg.slice(0, 80), "err");
+        setShowLog(true);
+      }
     } finally {
       setBusy(false);
+      setCloudJobId(null);
+      cancelCloudRef.current = false;
     }
+  }
+
+  async function onCancelCloud() {
+    if (!cloudJobId) return;
+    cancelCloudRef.current = true;
+    try { await fetch(`/api/job/${cloudJobId}`, { method: "DELETE" }); } catch { /* ignore */ }
   }
 
   async function onSaveToCloud() {
@@ -1207,9 +1226,20 @@ function EnhancePage() {
                     {loadingFFmpeg ? "جاري تحميل محرك FFmpeg..." : `جاري المعالجة...`}
                   </span>
                 </div>
-                <span className="font-mono text-violet-400 font-bold">
-                  {loadingFFmpeg ? "..." : `${progress}%`}
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="font-mono text-violet-400 font-bold">
+                    {loadingFFmpeg ? "..." : `${progress}%`}
+                  </span>
+                  {cloudJobId && (
+                    <button
+                      onClick={onCancelCloud}
+                      title="إلغاء المعالجة"
+                      className="flex items-center gap-1 rounded-lg border border-red-500/40 bg-red-500/10 px-2 py-1 text-xs font-semibold text-red-400 hover:bg-red-500/20 transition"
+                    >
+                      <X className="size-3" /> إلغاء
+                    </button>
+                  )}
+                </div>
               </div>
               <div className="h-2.5 bg-muted rounded-full overflow-hidden">
                 <progress

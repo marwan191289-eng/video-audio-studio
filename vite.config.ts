@@ -15,6 +15,7 @@ function cloudEnhanceDevPlugin(): Plugin {
     error?: string;
     createdAt: number;
     progress?: number;
+    ffmpegProcess?: { kill(signal?: string): boolean };
   }> = new Map();
 
   return {
@@ -220,24 +221,46 @@ function cloudEnhanceDevPlugin(): Plugin {
                   } catch { /* progress file not ready yet */ }
                 }, 1000);
 
+                const { spawn: _spawn } = await import("child_process");
+                const child = _spawn(ffmpegBin, argsWithProgress, {
+                  stdio: ["ignore", "ignore", "ignore"],
+                });
+                const jProc = _jobs.get(_jobId);
+                if (jProc) jProc.ffmpegProcess = child;
+
                 try {
-                  await execFileAsync(ffmpegBin, argsWithProgress, {
-                    maxBuffer: 500 * 1024 * 1024,
-                    timeout: 30 * 60 * 1000,
-                  } as object);
+                  await new Promise<void>((resolve, reject) => {
+                    child.on("close", (code: number | null) => {
+                      const j = _jobs.get(_jobId);
+                      if (j?.status === "cancelled") { resolve(); return; }
+                      if (code === 0) resolve();
+                      else reject(new Error(`FFmpeg exited ${code}`));
+                    });
+                    child.on("error", (err: Error) => {
+                      const j = _jobs.get(_jobId);
+                      if (j?.status === "cancelled") { resolve(); return; }
+                      reject(err);
+                    });
+                  });
                 } finally {
                   clearInterval(progressInterval);
                   ul(progressFile).catch(() => {});
                 }
 
                 const job = _jobs.get(_jobId);
-                if (job) { job.status = "done"; job.outputPath = tmpOut; job.progress = 100; }
-                console.log(`[job:${_jobId}] ✅ done`);
+                if (job && job.status !== "cancelled") {
+                  job.status = "done"; job.outputPath = tmpOut; job.progress = 100;
+                }
+                if (job?.status !== "cancelled") console.log(`[job:${_jobId}] ✅ done`);
               } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
-                console.error(`[job:${_jobId}] ❌ failed: ${msg.slice(0, 400)}`);
                 const job = _jobs.get(_jobId);
-                if (job) { job.status = "failed"; job.error = msg.slice(0, 400); }
+                if (job?.status === "cancelled") {
+                  console.log(`[job:${_jobId}] 🚫 cancelled`);
+                } else {
+                  console.error(`[job:${_jobId}] ❌ failed: ${msg.slice(0, 400)}`);
+                  if (job) { job.status = "failed"; job.error = msg.slice(0, 400); }
+                }
                 ul(tmpIn).catch(() => {});
                 ul(tmpOut).catch(() => {});
               } finally {
@@ -266,6 +289,25 @@ function cloudEnhanceDevPlugin(): Plugin {
           } else {
             res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
             res.end(JSON.stringify({ status: job.status, error: job.error, progress: job.progress ?? 0 }));
+          }
+          return;
+        }
+
+        // ── DELETE /api/job/:id — Cancel ──────────────────────────────────
+        if (pathname.startsWith("/api/job/") && !pathname.includes("/result") && method === "DELETE") {
+          const jobId = pathname.slice("/api/job/".length);
+          const job = _jobs.get(jobId);
+          if (!job || job.status !== "processing") {
+            res.writeHead(404, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "Job not found or not processing" }));
+          } else {
+            job.status = "cancelled";
+            if (job.ffmpegProcess) {
+              try { job.ffmpegProcess.kill("SIGTERM"); } catch { /* ignore */ }
+              setTimeout(() => { try { job.ffmpegProcess?.kill("SIGKILL"); } catch { /* ignore */ } }, 2000);
+            }
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ ok: true }));
           }
           return;
         }
