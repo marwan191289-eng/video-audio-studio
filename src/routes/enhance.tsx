@@ -771,16 +771,10 @@ function EnhancePage() {
       let res: Response;
 
       if (file.size > CHUNK_SIZE) {
-        // ── Chunked upload for large files ─────────────────────────────────
-        // Use Railway external API when available (avoids Replit proxy timeouts)
-        const railwayBase = (import.meta.env.VITE_RAILWAY_API_URL as string | undefined)?.replace(/\/$/, "") ?? "";
-        const uploadBase  = railwayBase ? railwayBase : "";
-        const enhanceBase = railwayBase ? railwayBase : "";
-
+        // ── Chunked upload for large files ──────────────────────────────────
         const sessionId   = crypto.randomUUID();
         const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
-        const target      = railwayBase ? "Railway ☁️" : "السيرفر";
-        appendLog(`📦 الملف كبير (${fileMB.toFixed(1)} MB) — رفع ${totalChunks} جزء إلى ${target}...`);
+        appendLog(`📦 الملف كبير (${fileMB.toFixed(1)} MB) — رفع ${totalChunks} جزء إلى السيرفر...`);
 
         for (let i = 0; i < totalChunks; i++) {
           const start = i * CHUNK_SIZE;
@@ -792,8 +786,7 @@ function EnhancePage() {
           chunkForm.append("chunkIndex", String(i));
           chunkForm.append("chunk", chunk, "chunk");
 
-          const chunkUrl = uploadBase ? `${uploadBase}/upload-chunk` : "/api/upload-chunk";
-          const chunkRes = await fetch(chunkUrl, { method: "POST", body: chunkForm });
+          const chunkRes = await fetch("/api/upload-chunk", { method: "POST", body: chunkForm });
           if (!chunkRes.ok) {
             const errText = await chunkRes.text().catch(() => `HTTP ${chunkRes.status}`);
             throw new Error(`فشل رفع الجزء ${i + 1}/${totalChunks}: ${errText}`);
@@ -801,10 +794,10 @@ function EnhancePage() {
 
           const uploadPct = Math.round(((i + 1) / totalChunks) * 45);
           setProgress(uploadPct);
-          appendLog(`📤 الجزء ${i + 1}/${totalChunks} — ${((end) / 1024 / 1024).toFixed(0)} MB`);
+          appendLog(`📤 الجزء ${i + 1}/${totalChunks} — ${(end / 1024 / 1024).toFixed(0)} MB`);
         }
 
-        appendLog(`⚙️ جاري المعالجة على ${target}...`);
+        appendLog(`⚙️ جاري المعالجة على السيرفر...`);
         setProgress(50);
 
         let serverTimer: ReturnType<typeof setInterval> | null = setInterval(() => {
@@ -817,9 +810,8 @@ function EnhancePage() {
         enhanceForm.append("mode", mode);
         enhanceForm.append("settings", JSON.stringify(modeSettings));
 
-        const enhanceUrl = enhanceBase ? `${enhanceBase}/enhance` : "/api/enhance";
         try {
-          res = await fetch(enhanceUrl, {
+          res = await fetch("/api/enhance", {
             method: "POST",
             body: enhanceForm,
           });
@@ -921,14 +913,8 @@ function EnhancePage() {
       showToast("✓ تمت المعالجة عبر السيرفر!", "ok");
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      if (msg.includes("Sample mode")) {
-        appendLog("❌ خطأ Rendi: الحساب في وضع تجريبي — يجب الترقية لمعالجة ملفاتك الخاصة.");
-        appendLog("🔗 الترقية: https://app.rendi.dev/plans");
-        showToast("Rendi: يجب ترقية الخطة لمعالجة ملفاتك — app.rendi.dev/plans", "err");
-      } else {
-        appendLog("❌ خطأ سحابي: " + msg);
-        showToast("فشل الاتصال بالسيرفر: " + msg.slice(0, 80), "err");
-      }
+      appendLog("❌ خطأ سحابي: " + msg);
+      showToast("فشل الاتصال بالسيرفر: " + msg.slice(0, 80), "err");
       setShowLog(true);
     } finally {
       setBusy(false);
