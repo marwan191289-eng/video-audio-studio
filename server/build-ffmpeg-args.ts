@@ -128,7 +128,13 @@ export function buildFFmpegArgs(
     const start = settings.trimStart ?? 0;
     const end = settings.trimEnd ?? 10;
     const dur = Math.max(0.1, end - start);
-    return ["-y", "-ss", String(start), "-i", inFile, "-t", String(dur), "-c", "copy", outFile];
+    return [
+      "-y", "-ss", String(start), "-i", inFile, "-t", String(dur),
+      "-c:v", "libx264", "-preset", "fast", "-crf", "20",
+      "-movflags", "+faststart",
+      "-c:a", "aac", "-b:a", "128k",
+      outFile,
+    ];
   }
 
   if (mode === "speed") {
@@ -172,7 +178,7 @@ export function buildFFmpegArgs(
   }
 
   if (mode === "remove-audio") {
-    return [...base, "-c:v", "copy", "-an", outFile];
+    return [...base, "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-movflags", "+faststart", "-an", outFile];
   }
 
   if (mode === "gif") {
