@@ -1,21 +1,8 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import { createClient } from "@supabase/supabase-js";
 import { writeFile, unlink, mkdir } from "fs/promises";
 import { join } from "path";
 import { existsSync } from "fs";
-import type { Database } from "@/integrations/supabase/types";
-
-function getSupabase() {
-  const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
-  const key =
-    process.env.SUPABASE_SERVICE_ROLE_KEY ||
-    process.env.SUPABASE_PUBLISHABLE_KEY ||
-    process.env.VITE_SUPABASE_PUBLISHABLE_KEY;
-
-  if (!url || !key) throw new Error("Supabase env vars missing (SUPABASE_URL / SUPABASE_PUBLISHABLE_KEY)");
-  return createClient<Database>(url, key);
-}
 
 const UPLOADS_DIR = join(process.cwd(), "uploads");
 
@@ -25,21 +12,28 @@ async function ensureUploadsDir() {
   }
 }
 
-export const listVideos = createServerFn({ method: "GET" }).handler(async () => {
-  const supabase = getSupabase();
-  const { data, error } = await supabase
-    .from("processed_videos")
-    .select("id, name, storage_path, size_bytes, created_at")
-    .order("created_at", { ascending: false });
+async function getDb() {
+  const { db } = await import("../../../server/db");
+  return db;
+}
 
-  if (error) throw new Error(error.message);
-  return data as {
-    id: string;
-    name: string;
-    storage_path: string;
-    size_bytes: number | null;
-    created_at: string;
-  }[];
+export const listVideos = createServerFn({ method: "GET" }).handler(async () => {
+  const db = await getDb();
+  const { processedVideos } = await import("../../../shared/schema");
+  const { desc } = await import("drizzle-orm");
+
+  const rows = await db
+    .select()
+    .from(processedVideos)
+    .orderBy(desc(processedVideos.createdAt));
+
+  return rows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    storage_path: r.storagePath,
+    size_bytes: r.sizeBytes ?? null,
+    created_at: r.createdAt.toISOString(),
+  }));
 });
 
 export const saveVideo = createServerFn({ method: "POST" })
@@ -62,25 +56,28 @@ export const saveVideo = createServerFn({ method: "POST" })
     const base64 = data.fileData.replace(/^data:[^;]+;base64,/, "");
     await writeFile(filePath, Buffer.from(base64, "base64"));
 
-    const supabase = getSupabase();
-    const { error } = await supabase.from("processed_videos").insert({
+    const db = await getDb();
+    const { processedVideos } = await import("../../../shared/schema");
+
+    await db.insert(processedVideos).values({
       id,
       name: data.name,
-      storage_path: storagePath,
-      size_bytes: data.sizeBytes,
-      settings: (data.settings ?? null) as import("@/integrations/supabase/types").Json,
+      storagePath,
+      sizeBytes: data.sizeBytes,
+      settings: (data.settings ?? null) as Record<string, unknown> | null,
     });
 
-    if (error) throw new Error(error.message);
     return { id, storagePath };
   });
 
 export const deleteVideo = createServerFn({ method: "POST" })
   .inputValidator(z.object({ id: z.string(), storagePath: z.string() }))
   .handler(async ({ data }) => {
-    const supabase = getSupabase();
-    const { error } = await supabase.from("processed_videos").delete().eq("id", data.id);
-    if (error) throw new Error(error.message);
+    const db = await getDb();
+    const { processedVideos } = await import("../../../shared/schema");
+    const { eq } = await import("drizzle-orm");
+
+    await db.delete(processedVideos).where(eq(processedVideos.id, data.id));
 
     try {
       await unlink(join(UPLOADS_DIR, data.storagePath));
