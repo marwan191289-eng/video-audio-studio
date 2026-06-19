@@ -1,0 +1,8 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "0413IjNIJ5uifInPO5cWj"
+uri = "file://railway-ffmpeg-api.tar.gz"
+type = "unspecified"
+title = "railway-ffmpeg-api.tar.gz — ارفعه على Railway"
