@@ -14,6 +14,7 @@ function cloudEnhanceDevPlugin(): Plugin {
     ext: string;
     error?: string;
     createdAt: number;
+    progress?: number;
   }> = new Map();
 
   return {
@@ -190,13 +191,47 @@ function cloudEnhanceDevPlugin(): Plugin {
                 const args = buildFFmpegArgs(_mode, _settings as Parameters<typeof buildFFmpegArgs>[1], tmpIn, tmpOut);
                 console.log(`[job:${_jobId}] mode=${_mode} ffmpeg ${args.slice(0, 6).join(" ")} ...`);
 
-                await execFileAsync(ffmpegBin, args, {
-                  maxBuffer: 500 * 1024 * 1024,
-                  timeout: 30 * 60 * 1000,
-                } as object);
+                // ── Real-time progress tracking ──────────────────────────
+                let totalDurationSec = 0;
+                const ffprobeBin = ffmpegBin === "ffmpeg" ? "ffprobe" : ffmpegBin.replace(/ffmpeg$/, "ffprobe");
+                try {
+                  const { stdout: probeOut } = await execFileAsync(ffprobeBin, [
+                    "-v", "quiet", "-print_format", "json", "-show_format", tmpIn,
+                  ], { timeout: 10_000 } as object);
+                  const probe = JSON.parse(probeOut) as { format?: { duration?: string } };
+                  totalDurationSec = parseFloat(probe.format?.duration ?? "0");
+                } catch { /* no duration — progress will be indeterminate */ }
+
+                const progressFile = `${tmpOut}.progress`;
+                const argsWithProgress = args.length >= 2
+                  ? [...args.slice(0, -1), "-progress", progressFile, args[args.length - 1]]
+                  : args;
+
+                const progressInterval = setInterval(async () => {
+                  try {
+                    const content = (await rf(progressFile)).toString("utf8");
+                    const m = content.match(/out_time=(\d+):(\d+):(\d+\.\d+)/);
+                    if (m && totalDurationSec > 0) {
+                      const curSec = parseInt(m[1]) * 3600 + parseInt(m[2]) * 60 + parseFloat(m[3]);
+                      const pct = Math.min(95, Math.round((curSec / totalDurationSec) * 100));
+                      const j = _jobs.get(_jobId);
+                      if (j) j.progress = pct;
+                    }
+                  } catch { /* progress file not ready yet */ }
+                }, 1000);
+
+                try {
+                  await execFileAsync(ffmpegBin, argsWithProgress, {
+                    maxBuffer: 500 * 1024 * 1024,
+                    timeout: 30 * 60 * 1000,
+                  } as object);
+                } finally {
+                  clearInterval(progressInterval);
+                  ul(progressFile).catch(() => {});
+                }
 
                 const job = _jobs.get(_jobId);
-                if (job) { job.status = "done"; job.outputPath = tmpOut; }
+                if (job) { job.status = "done"; job.outputPath = tmpOut; job.progress = 100; }
                 console.log(`[job:${_jobId}] ✅ done`);
               } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
@@ -230,7 +265,7 @@ function cloudEnhanceDevPlugin(): Plugin {
             res.end(JSON.stringify({ error: "Job not found" }));
           } else {
             res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
-            res.end(JSON.stringify({ status: job.status, error: job.error }));
+            res.end(JSON.stringify({ status: job.status, error: job.error, progress: job.progress ?? 0 }));
           }
           return;
         }

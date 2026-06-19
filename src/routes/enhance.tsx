@@ -824,6 +824,7 @@ function EnhancePage() {
       setProgress(48);
 
       // ── Polling كل 5 ثوانٍ حتى تكتمل المعالجة (max 20 دقيقة) ────────────
+      // Fallback fake-progress timer kicks in only when server sends 0%
       progressTimer = setInterval(() => {
         setProgress(p => Math.min(+(p + 0.15).toFixed(2), 88));
       }, 2000);
@@ -835,8 +836,18 @@ function EnhancePage() {
           polls++;
           const statusRes = await fetch(`/api/job/${jobId}`);
           if (!statusRes.ok) continue;
-          const { status, error: jobErr } = await statusRes.json() as { status: string; error?: string };
-          if (polls % 6 === 0) appendLog(`⏳ انتظار... (${polls * 5}ث)`);
+          const { status, error: jobErr, progress: serverProgress } = await statusRes.json() as {
+            status: string; error?: string; progress?: number;
+          };
+          // Use real server progress when available (maps 0–100 → 48–88 display range)
+          if (typeof serverProgress === "number" && serverProgress > 0 && serverProgress <= 100) {
+            const displayPct = 48 + Math.round(serverProgress * 0.4);
+            setProgress(Math.min(88, displayPct));
+          }
+          if (polls % 6 === 0) {
+            const pctLabel = serverProgress ? ` (${serverProgress}%)` : ` (${polls * 5}ث)`;
+            appendLog(`⏳ انتظار...${pctLabel}`);
+          }
           if (status === "done") { appendLog(`✅ اكتملت المعالجة!`); break; }
           if (status === "failed") throw new Error(jobErr || "فشلت المعالجة على السيرفر");
         }
