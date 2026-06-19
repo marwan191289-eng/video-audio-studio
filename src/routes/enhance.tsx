@@ -797,16 +797,22 @@ function EnhancePage() {
           appendLog(`📤 الجزء ${i + 1}/${totalChunks} — ${((end) / 1024 / 1024).toFixed(0)} MB`);
         }
 
-        appendLog("⚙️ جاري التجميع والمعالجة على السيرفر...");
+        appendLog("☁️ جاري الإرسال إلى Rendi للمعالجة السحابية...");
         setProgress(50);
 
-        const form = new FormData();
-        form.append("sessionId", sessionId);
-        form.append("totalChunks", String(totalChunks));
-        form.append("mode", mode);
-        form.append("settings", JSON.stringify(modeSettings));
+        let rendiTimer: ReturnType<typeof setInterval> | null = setInterval(() => {
+          setProgress((p) => { if (p < 88) return +(p + 0.25).toFixed(2); return p; });
+        }, 1000);
 
-        res = await fetch("/api/enhance", { method: "POST", body: form });
+        try {
+          res = await fetch("/api/rendi-enhance", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ sessionId, totalChunks, mode, settings: modeSettings }),
+          });
+        } finally {
+          if (rendiTimer) { clearInterval(rendiTimer); rendiTimer = null; }
+        }
       } else {
         // ── Direct upload for small files ──────────────────────────────────
         appendLog(`📤 جاري رفع الملف (${fileMB.toFixed(1)} MB)...`);
@@ -902,8 +908,14 @@ function EnhancePage() {
       showToast("✓ تمت المعالجة عبر السيرفر!", "ok");
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      appendLog("❌ خطأ سحابي: " + msg);
-      showToast("فشل الاتصال بالسيرفر: " + msg.slice(0, 80), "err");
+      if (msg.includes("Sample mode")) {
+        appendLog("❌ خطأ Rendi: الحساب في وضع تجريبي — يجب الترقية لمعالجة ملفاتك الخاصة.");
+        appendLog("🔗 الترقية: https://app.rendi.dev/plans");
+        showToast("Rendi: يجب ترقية الخطة لمعالجة ملفاتك — app.rendi.dev/plans", "err");
+      } else {
+        appendLog("❌ خطأ سحابي: " + msg);
+        showToast("فشل الاتصال بالسيرفر: " + msg.slice(0, 80), "err");
+      }
       setShowLog(true);
     } finally {
       setBusy(false);

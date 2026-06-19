@@ -1,3 +1,4 @@
 - [FFmpeg.wasm setup in Replit](ffmpeg-wasm-replit.md) — @ffmpeg/core must be installed locally + copied to public/; CDN always fails in Replit sandbox.
 - [FFmpeg.wasm root cause fix](ffmpeg-wasm-root-cause.md) — Vite creates a module worker; importScripts fails; must use ESM @ffmpeg/core (has export default) + toBlobURL for both files. UMD core always fails silently.
 - [h3-v2 Replit migration](h3-v2-replit.md) — @tanstack/react-start requires h3-v2 (blocked by Replit firewall); must manually extract tarball from registry into node_modules/h3-v2/ then bun install will succeed.
+- [Rendi API integration](rendi-api.md) — auth=X-Api-Key header; POST /v1/run-ffmpeg-command; poll status="SUCCESS"; free plan blocks non-sample URLs (need paid plan).
