@@ -772,9 +772,15 @@ function EnhancePage() {
 
       if (file.size > CHUNK_SIZE) {
         // ── Chunked upload for large files ─────────────────────────────────
-        const sessionId = crypto.randomUUID();
+        // Use Railway external API when available (avoids Replit proxy timeouts)
+        const railwayBase = (import.meta.env.VITE_RAILWAY_API_URL as string | undefined)?.replace(/\/$/, "") ?? "";
+        const uploadBase  = railwayBase ? railwayBase : "";
+        const enhanceBase = railwayBase ? railwayBase : "";
+
+        const sessionId   = crypto.randomUUID();
         const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
-        appendLog(`📦 الملف كبير (${fileMB.toFixed(1)} MB) — رفع ${totalChunks} جزء بحجم 45 MB لكل جزء...`);
+        const target      = railwayBase ? "Railway ☁️" : "السيرفر";
+        appendLog(`📦 الملف كبير (${fileMB.toFixed(1)} MB) — رفع ${totalChunks} جزء إلى ${target}...`);
 
         for (let i = 0; i < totalChunks; i++) {
           const start = i * CHUNK_SIZE;
@@ -786,7 +792,8 @@ function EnhancePage() {
           chunkForm.append("chunkIndex", String(i));
           chunkForm.append("chunk", chunk, "chunk");
 
-          const chunkRes = await fetch("/api/upload-chunk", { method: "POST", body: chunkForm });
+          const chunkUrl = uploadBase ? `${uploadBase}/upload-chunk` : "/api/upload-chunk";
+          const chunkRes = await fetch(chunkUrl, { method: "POST", body: chunkForm });
           if (!chunkRes.ok) {
             const errText = await chunkRes.text().catch(() => `HTTP ${chunkRes.status}`);
             throw new Error(`فشل رفع الجزء ${i + 1}/${totalChunks}: ${errText}`);
@@ -797,7 +804,7 @@ function EnhancePage() {
           appendLog(`📤 الجزء ${i + 1}/${totalChunks} — ${((end) / 1024 / 1024).toFixed(0)} MB`);
         }
 
-        appendLog("⚙️ جاري إرسال الملف للسيرفر للمعالجة...");
+        appendLog(`⚙️ جاري المعالجة على ${target}...`);
         setProgress(50);
 
         let serverTimer: ReturnType<typeof setInterval> | null = setInterval(() => {
@@ -810,8 +817,9 @@ function EnhancePage() {
         enhanceForm.append("mode", mode);
         enhanceForm.append("settings", JSON.stringify(modeSettings));
 
+        const enhanceUrl = enhanceBase ? `${enhanceBase}/enhance` : "/api/enhance";
         try {
-          res = await fetch("/api/enhance", {
+          res = await fetch(enhanceUrl, {
             method: "POST",
             body: enhanceForm,
           });
