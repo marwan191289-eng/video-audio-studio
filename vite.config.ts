@@ -340,7 +340,6 @@ function cloudEnhanceDevPlugin(): Plugin {
             res.writeHead(200, {
               "Content-Type": mime,
               "Content-Length": String(buf.length),
-              "Content-Disposition": `attachment; filename="enhanced.${ext}"`,
               "Cross-Origin-Resource-Policy": "cross-origin",
             });
             res.end(buf);

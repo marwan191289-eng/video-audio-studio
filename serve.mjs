@@ -390,7 +390,6 @@ const server = http.createServer(async (req, res) => {
         res.writeHead(200, {
           "Content-Type": mime,
           "Content-Length": String(buf.length),
-          "Content-Disposition": `attachment; filename="enhanced.${ext}"`,
           ...SECURITY_HEADERS,
         });
         res.end(buf);

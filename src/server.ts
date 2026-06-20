@@ -647,7 +647,6 @@ export default {
           status: 200,
           headers: {
             "Content-Type": mime,
-            "Content-Disposition": `attachment; filename="enhanced.${ext}"`,
             "Content-Length": String(buf.byteLength),
             "Cross-Origin-Resource-Policy": "cross-origin",
           },
