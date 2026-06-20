@@ -518,9 +518,153 @@ function cloudEnhanceDevPlugin(): Plugin {
           return;
         }
 
+        // ── POST /api/analyze ─────────────────────────────────────────────
+        if (pathname === "/api/analyze" && method === "POST") {
+          try {
+            const [{ default: Busboy }, { writeFile, unlink }, { tmpdir }, { join }, { execFile }, { promisify }] =
+              await Promise.all([
+                import("busboy"), import("fs/promises"), import("os"), import("path"),
+                import("child_process"), import("util"),
+              ]);
+            const execFileAsync = (promisify as any)(execFile as any) as (
+              cmd: string, args: string[], opts?: object
+            ) => Promise<{ stdout: string; stderr: string }>;
+            const bb = Busboy({ headers: req.headers });
+            const parts: Buffer[] = [];
+            await new Promise<void>((resolve, reject) => {
+              bb.on("file", (_: string, file: any) => {
+                file.on("data", (d: Buffer) => parts.push(d));
+                file.on("end", () => {});
+              });
+              bb.on("finish", resolve); bb.on("error", reject); req.pipe(bb);
+            });
+            const fileBuffer = Buffer.concat(parts);
+            if (!fileBuffer.length) { res.writeHead(400, { "Content-Type": "application/json" }); res.end(JSON.stringify({ error: "No file" })); return; }
+            const ts = Date.now();
+            const tmpIn = join(tmpdir(), `analyze-${ts}.mp4`);
+            await writeFile(tmpIn, fileBuffer);
+            try {
+              const { stdout } = await execFileAsync("ffprobe", ["-v", "quiet", "-print_format", "json", "-show_streams", "-show_format", tmpIn], { timeout: 30_000 });
+              const probe = JSON.parse(stdout);
+              const analysis = buildAnalysis(probe);
+              res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify(analysis));
+            } finally { unlink(tmpIn).catch(() => {}); }
+          } catch (err) { res.writeHead(500, { "Content-Type": "application/json" }); res.end(JSON.stringify({ error: String(err) })); }
+          return;
+        }
+
+        // ── POST /api/cloud-exec ──────────────────────────────────────────────
+        if (pathname === "/api/cloud-exec" && method === "POST") {
+          try {
+            const [{ default: Busboy }, { writeFile, readFile, unlink }, { tmpdir }, { join }, { execFile }, { promisify }] =
+              await Promise.all([
+                import("busboy"), import("fs/promises"), import("os"), import("path"),
+                import("child_process"), import("util"),
+              ]);
+            const execFileAsync = (promisify as any)(execFile as any) as (
+              cmd: string, args: string[], opts?: object
+            ) => Promise<{ stdout: string; stderr: string }>;
+            const bb = Busboy({ headers: req.headers });
+            const parts: Buffer[] = [];
+            let argsJson = "[]"; let outputName = "output.mp4"; let inputName = "input.mp4";
+            bb.on("file", (_: string, file: any, info: any) => {
+              if (info?.filename) inputName = info.filename;
+              file.on("data", (d: Buffer) => parts.push(d));
+            });
+            bb.on("field", (name: string, value: string) => {
+              if (name === "args") argsJson = value;
+              if (name === "outputName") outputName = value;
+            });
+            await new Promise<void>((resolve, reject) => { bb.on("finish", resolve); bb.on("error", reject); req.pipe(bb); });
+            const fileBuffer = Buffer.concat(parts);
+            if (!fileBuffer.length) { res.writeHead(400, { "Content-Type": "application/json" }); res.end(JSON.stringify({ error: "No file" })); return; }
+            const ts = Date.now();
+            const ext = (inputName.split(".").pop() || "mp4").toLowerCase();
+            const outExt = (outputName.split(".").pop() || "mp4").toLowerCase();
+            const tmpIn = join(tmpdir(), `cexec-in-${ts}.${ext}`);
+            const tmpOut = join(tmpdir(), `cexec-out-${ts}.${outExt}`);
+            await writeFile(tmpIn, fileBuffer);
+            try {
+              let args: string[] = JSON.parse(argsJson);
+              args = args.map(a => a === inputName ? tmpIn : a === outputName ? tmpOut : a);
+              if (!args.includes(tmpOut)) args = [...args.slice(0, -1), tmpOut];
+              await execFileAsync("ffmpeg", ["-y", ...args.filter(a => a !== "-y")], { maxBuffer: 200 * 1024 * 1024, timeout: 10 * 60_000 });
+              const outBuf = await readFile(tmpOut);
+              const mime = outExt === "mp3" ? "audio/mpeg" : outExt === "gif" ? "image/gif" : outExt === "jpg" ? "image/jpeg" : "video/mp4";
+              res.writeHead(200, { "Content-Type": mime, "Content-Disposition": `attachment; filename="${outputName}"`, "Content-Length": String(outBuf.length) });
+              res.end(outBuf);
+            } finally { unlink(tmpIn).catch(() => {}); unlink(tmpOut).catch(() => {}); }
+          } catch (err) { res.writeHead(500, { "Content-Type": "application/json" }); res.end(JSON.stringify({ error: String(err) })); }
+          return;
+        }
+
         return next();
       });
     },
+  };
+}
+
+function buildAnalysis(probe: any) {
+  const vs = probe.streams?.find((s: any) => s.codec_type === "video");
+  const as_ = probe.streams?.find((s: any) => s.codec_type === "audio");
+  const fmt = probe.format || {};
+  const width = vs?.width || 0; const height = vs?.height || 0;
+  const codec = vs?.codec_name || "unknown";
+  const fpsStr = vs?.r_frame_rate || "30/1";
+  const fpsParts = fpsStr.split("/"); const fps = parseFloat(fpsParts[0]) / (parseFloat(fpsParts[1]) || 1);
+  const bitrate = parseInt(fmt.bit_rate || "0") / 1000;
+  const duration = parseFloat(fmt.duration || "0");
+  const pixFmt = vs?.pix_fmt || "yuv420p";
+  const audioCodec = as_?.codec_name || "none";
+  const audioBitrate = parseInt(as_?.bit_rate || "0") / 1000;
+  const audioSampleRate = parseInt(as_?.sample_rate || "0");
+  const recs: any[] = [];
+  let score = 65;
+  const expectedBr = height >= 2160 ? 15000 : height >= 1080 ? 4000 : height >= 720 ? 2000 : 800;
+  if (height < 480) {
+    score -= 25;
+    recs.push({ priority: 1, category: "دقة الوضوح", title: "دقة منخفضة جداً — أقل من 480p", desc: `الفيديو بدقة ${width}×${height}. رفعه لـ 1280×720 سيحسن الجودة بشكل جوهري.`, impact: "عالٍ جداً", mode: "upscale", color: "red" });
+  } else if (height < 720) {
+    score -= 12;
+    recs.push({ priority: 2, category: "دقة الوضوح", title: "دقة أقل من HD — 720p", desc: `الفيديو بدقة ${width}×${height}. رفعه لـ 1920×1080 سيرقّيه لمستوى Full HD.`, impact: "عالٍ", mode: "upscale", color: "orange" });
+  } else if (height >= 1080) { score += 10; }
+  const goodCodecs = ["h264", "hevc", "h265", "av1", "vp9", "vp8"];
+  if (!goodCodecs.includes(codec)) {
+    score -= 18;
+    recs.push({ priority: 1, category: "كوديك الترميز", title: `كوديك قديم: ${codec.toUpperCase()}`, desc: `هذا الكوديك قديم وغير فعّال. التحويل لـ H.264 يحسن الجودة ويقلل حجم الملف بنسبة تصل لـ 50%.`, impact: "عالٍ جداً", mode: "compress", color: "red" });
+  } else if (codec === "h264") { score += 8; }
+  if (bitrate > 0 && bitrate < expectedBr * 0.35) {
+    score -= 18;
+    recs.push({ priority: 1, category: "معدل البيانات", title: "معدل البيانات منخفض جداً", desc: `معدل البيانات ${Math.round(bitrate)} kbps ضعيف جداً لدقة ${height}p. الحد الأدنى المُوصى ${Math.round(expectedBr * 0.5)} kbps.`, impact: "عالٍ جداً", mode: "auto-enhance", color: "red" });
+  } else if (bitrate > expectedBr * 4) {
+    recs.push({ priority: 4, category: "حجم الملف", title: "معدل البيانات مرتفع — يمكن ضغطه", desc: `معدل ${Math.round(bitrate)} kbps أعلى مما يلزم. الضغط سيقلل الحجم بدون فقدان ملحوظ.`, impact: "متوسط", mode: "compress", color: "blue" });
+  }
+  if (fps > 0 && fps < 23.9) {
+    score -= 8;
+    recs.push({ priority: 3, category: "معدل الإطارات", title: `معدل إطارات منخفض — ${fps.toFixed(1)} fps`, desc: `المعيار الأدنى للمحتوى السينمائي 24fps. رفع المعدل لـ 30fps سيجعل الحركة أكثر سلاسة.`, impact: "متوسط", mode: "fps", color: "orange" });
+  } else if (fps >= 60) { score += 5; }
+  if (!as_) {
+    recs.push({ priority: 5, category: "الصوت", title: "لا يوجد مسار صوت", desc: "الفيديو لا يحتوي على صوت — إن كان مطلوباً يمكنك إضافة مسار صوتي.", impact: "يعتمد على الاستخدام", mode: null, color: "blue" });
+  } else if (audioBitrate > 0 && audioBitrate < 64) {
+    score -= 5;
+    recs.push({ priority: 4, category: "جودة الصوت", title: "جودة الصوت منخفضة", desc: `معدل بيانات الصوت ${Math.round(audioBitrate)} kbps منخفض. يُنصح بـ 128kbps على الأقل للمحتوى الاحترافي.`, impact: "متوسط", mode: "denoise", color: "orange" });
+  }
+  if (pixFmt && !["yuv420p", "yuvj420p"].includes(pixFmt)) {
+    recs.push({ priority: 5, category: "التوافقية", title: `صيغة بكسل غير قياسية: ${pixFmt}`, desc: "تحويل إلى yuv420p يضمن التوافق مع معظم المنصات والأجهزة.", impact: "منخفض", mode: "compress", color: "blue" });
+  }
+  if (codec === "h264" && height >= 720 && bitrate > expectedBr * 0.5 && fps >= 24) {
+    score += 10;
+    if (recs.length === 0) {
+      recs.push({ priority: 1, category: "تحسين الصورة", title: "تحسين عام لأعلى جودة", desc: "الفيديو بجودة جيدة. التحسين التلقائي + تصحيح الألوان سيرقّيه لمستوى احترافي.", impact: "متوسط", mode: "auto-enhance", color: "green" });
+    }
+  }
+  recs.push({ priority: 6, category: "تنقية الصورة", title: "إزالة الضوضاء الرقمية", desc: "تطبيق مرشح إزالة الضوضاء سيحسن وضوح التفاصيل ويزيل التشويشات البصرية.", impact: "متوسط", mode: "denoise", color: "blue" });
+  score = Math.max(5, Math.min(100, score));
+  return {
+    videoInfo: { width, height, codec, fps: parseFloat(fps.toFixed(2)), bitrate: Math.round(bitrate), duration: Math.round(duration), pixFmt, audioCodec, audioBitrate: Math.round(audioBitrate), audioSampleRate },
+    qualityScore: score,
+    recommendations: recs.sort((a: any, b: any) => a.priority - b.priority),
+    suggestedMode: recs[0]?.mode || "auto-enhance",
   };
 }
 

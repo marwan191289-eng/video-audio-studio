@@ -217,6 +217,40 @@ export function buildFFmpegArgs(
     ];
   }
 
+  if (mode === "fingerprint") {
+    const s = settings as any;
+    const method: string = s.method ?? "all";
+    const crfVariance: number = s.crfVariance ?? 22;
+    const noiseLevel: number = Math.max(1, Math.min(5, s.noiseLevel ?? 1));
+    const newTitle: string = s.newTitle ?? "";
+    const newArtist: string = s.newArtist ?? "";
+    const newComment: string = s.newComment ?? "Processed";
+    const changeTimestamp: boolean = s.changeTimestamp !== false;
+    const addSubtle: boolean = s.addSubtle !== false;
+
+    const args: string[] = ["-y", "-i", inFile, "-map_metadata", "-1"];
+    if (newTitle) args.push("-metadata", `title=${newTitle}`);
+    if (newArtist) args.push("-metadata", `artist=${newArtist}`);
+    if (newComment) args.push("-metadata", `comment=${newComment}`);
+    if (changeTimestamp) {
+      const now = new Date().toISOString().replace("T", " ").replace(/\.\d+Z/, "");
+      args.push("-metadata", `creation_time=${now}`);
+    }
+    const vf: string[] = [];
+    if (method !== "strip-meta" && (addSubtle || method === "noise-inject")) {
+      vf.push(`noise=alls=${noiseLevel}:allf=t+u`);
+    }
+    if (vf.length > 0) args.push("-vf", [...new Set(vf)].join(","));
+    if (method === "strip-meta") {
+      args.push("-c", "copy");
+    } else {
+      args.push("-c:v", "libx264", "-crf", String(crfVariance), "-preset", "veryfast");
+      args.push("-c:a", "aac", "-b:a", "128k");
+    }
+    args.push("-movflags", "+faststart", outFile);
+    return args;
+  }
+
   // fallback: balanced auto-enhance
   return [
     ...base,

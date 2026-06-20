@@ -19,6 +19,7 @@ import {
   Cpu,
   Layers,
   Blend,
+  ScanSearch,
 } from "lucide-react";
 
 export const Route = createFileRoute("/")({
@@ -82,6 +83,14 @@ const features = [
     href: "/terminal",
     gradient: "from-sky-500 to-blue-600",
     badge: "50+ سكربت",
+  },
+  {
+    icon: ScanSearch,
+    title: "فحص الذكاء الاصطناعي",
+    desc: "حمّل فيديوك وسيحلله الذكاء الاصطناعي — يكشف مشاكل الجودة ويرتّب لك خطوات المعالجة المُثلى.",
+    href: "/analyze",
+    gradient: "from-cyan-500 to-sky-600",
+    badge: "AI جديد",
   },
   {
     icon: Layers,
