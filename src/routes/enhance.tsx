@@ -214,6 +214,7 @@ function EnhancePage() {
   const [outputUrl, setOutputUrl] = useState<string | null>(null);
   const [outputBlob, setOutputBlob] = useState<Blob | null>(null);
   const [outputName, setOutputName] = useState("output.mp4");
+  const [cloudResultJobId, setCloudResultJobId] = useState<string | null>(null);
   const [mode, setMode] = useState<Mode>("enhance");
   const [progress, setProgress] = useState(0);
   const [busy, setBusy] = useState(false);
@@ -357,8 +358,7 @@ function EnhancePage() {
     const f = e.dataTransfer.files[0];
     if (f && f.type.startsWith("video/")) {
       setFile(f);
-      setOutputUrl(null);
-      setOutputBlob(null);
+      clearOutput();
     }
   }
 
@@ -387,8 +387,7 @@ function EnhancePage() {
     setBusy(true);
     setLoadingFFmpeg(true);
     setProgress(0);
-    setOutputUrl(null);
-    setOutputBlob(null);
+    clearOutput();
     setLog("");
     const logHandler = (m: string) => appendLog(m);
 
@@ -724,8 +723,7 @@ function EnhancePage() {
 
     setBusy(true);
     setProgress(0);
-    setOutputUrl(null);
-    setOutputBlob(null);
+    clearOutput();
     setLog("");
     cancelCloudRef.current = false;
 
@@ -863,69 +861,7 @@ function EnhancePage() {
         if (progressTimer) { clearInterval(progressTimer); progressTimer = null; }
       }
 
-      // ── تنزيل النتيجة ──────────────────────────────────────────────────────
-      appendLog(`📥 جاري تنزيل الملف المُعالَج...`);
-      setProgress(90);
-      res = await fetch(`/api/job-result/${jobId}`);
-
-      if (!res.ok) {
-        let errMsg = `HTTP ${res.status}`;
-        try { errMsg = await res.text() || errMsg; } catch { /* ignore */ }
-        throw new Error(errMsg);
-      }
-
-      appendLog("⚙️ السيرفر جاهز — جاري استلام الملف المُعالَج...");
-      setProgress(92);
-
-      // Phase 2: stream the response body with real progress tracking
-      const contentLength = parseInt(res.headers.get("Content-Length") ?? "0", 10);
-      let resultBlob: Blob;
-
-      if (contentLength > 0 && res.body) {
-        const reader = res.body.getReader();
-        const chunks: Uint8Array[] = [];
-        let received = 0;
-
-        progressTimer = setInterval(() => {
-          setProgress((p) => Math.min(p + 0.8, 92));
-        }, 400);
-
-        try {
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            chunks.push(value);
-            received += value.length;
-            if (contentLength > 0) {
-              const pct = 60 + Math.round((received / contentLength) * 32);
-              setProgress(pct);
-            }
-          }
-        } finally {
-          if (progressTimer) { clearInterval(progressTimer); progressTimer = null; }
-        }
-
-        const all = new Uint8Array(received);
-        let offset = 0;
-        for (const chunk of chunks) { all.set(chunk, offset); offset += chunk.length; }
-        const mime = mode === "extract-audio" ? "audio/mpeg"
-          : mode === "gif" ? "image/gif"
-          : mode === "thumbnail" ? "image/jpeg"
-          : "video/mp4";
-        resultBlob = new Blob([all], { type: mime });
-      } else {
-        // Fallback: simple blob() if Content-Length not available
-        progressTimer = setInterval(() => {
-          setProgress((p) => Math.min(p + 0.8, 92));
-        }, 400);
-        try {
-          resultBlob = await res.blob();
-        } finally {
-          if (progressTimer) { clearInterval(progressTimer); progressTimer = null; }
-        }
-      }
-
-      // Determine output extension from mode
+      // ── النتيجة جاهزة على السيرفر — استخدم URL مباشر (بدون تحميل في الذاكرة) ──
       const extMap: Partial<Record<Mode, string>> = {
         "extract-audio": "mp3",
         gif: "gif",
@@ -935,11 +871,10 @@ function EnhancePage() {
       const outName = `cloud-${mode}-output.${ext}`;
 
       setProgress(100);
-      const url = URL.createObjectURL(resultBlob);
-      setOutputBlob(resultBlob);
-      setOutputUrl(url);
+      setCloudResultJobId(jobId);
+      setOutputUrl(`/api/job-result/${jobId}`);
       setOutputName(outName);
-      appendLog(`✅ اكتملت المعالجة السحابية بنجاح! (${(resultBlob.size / 1024 / 1024).toFixed(2)} MB)`);
+      appendLog(`✅ اكتملت المعالجة السحابية بنجاح!`);
       showToast("✓ تمت المعالجة عبر السيرفر!", "ok");
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -957,6 +892,12 @@ function EnhancePage() {
     }
   }
 
+  function clearOutput() {
+    setOutputUrl(null);
+    setOutputBlob(null);
+    setCloudResultJobId(null);
+  }
+
   async function onCancelCloud() {
     if (!cloudJobId) return;
     cancelCloudRef.current = true;
@@ -964,21 +905,34 @@ function EnhancePage() {
   }
 
   async function onSaveToCloud() {
-    if (!outputBlob) return;
     setSaving(true);
     try {
+      let blob = outputBlob;
+      let mimeType = outputBlob?.type ?? "video/mp4";
+      let sizeBytes = outputBlob?.size ?? 0;
+
+      if (!blob && cloudResultJobId) {
+        const r = await fetch(`/api/job-result/${cloudResultJobId}`);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        blob = await r.blob();
+        mimeType = blob.type || "video/mp4";
+        sizeBytes = blob.size;
+      }
+
+      if (!blob) { showToast("لا يوجد ملف للحفظ", "err"); return; }
+
       const reader = new FileReader();
       const fileData: string = await new Promise((resolve, reject) => {
         reader.onload = () => resolve(reader.result as string);
         reader.onerror = reject;
-        reader.readAsDataURL(outputBlob);
+        reader.readAsDataURL(blob!);
       });
       await saveVideo({
         data: {
           name: outputName,
           fileData,
-          mimeType: outputBlob.type,
-          sizeBytes: outputBlob.size,
+          mimeType,
+          sizeBytes,
           settings: { mode },
         },
       });
@@ -1117,8 +1071,7 @@ function EnhancePage() {
               const f = e.target.files?.[0];
               if (f) {
                 setFile(f);
-                setOutputUrl(null);
-                setOutputBlob(null);
+                clearOutput();
               }
             }}
           />
@@ -1162,8 +1115,7 @@ function EnhancePage() {
                 <button
                   onClick={() => {
                     setFile(null);
-                    setOutputUrl(null);
-                    setOutputBlob(null);
+                    clearOutput();
                   }}
                   aria-label="حذف الملف"
                   className="text-destructive hover:underline text-xs"
@@ -1262,13 +1214,22 @@ function EnhancePage() {
           {/* Output actions */}
           {outputUrl && (
             <div className="flex flex-wrap gap-2.5">
-              <a
-                href={outputUrl}
-                download={outputName}
-                className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-5 py-2.5 font-semibold text-white hover:opacity-90 transition shadow-lg shadow-violet-500/20"
-              >
-                <Download className="size-4" /> تنزيل الملف
-              </a>
+              {cloudResultJobId ? (
+                <button
+                  onClick={() => window.open(`/api/job-result/${cloudResultJobId}?dl=1`, "_blank")}
+                  className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-5 py-2.5 font-semibold text-white hover:opacity-90 transition shadow-lg shadow-violet-500/20"
+                >
+                  <Download className="size-4" /> تنزيل الملف
+                </button>
+              ) : (
+                <a
+                  href={outputUrl}
+                  download={outputName}
+                  className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-5 py-2.5 font-semibold text-white hover:opacity-90 transition shadow-lg shadow-violet-500/20"
+                >
+                  <Download className="size-4" /> تنزيل الملف
+                </a>
+              )}
               <button
                 onClick={onSaveToCloud}
                 disabled={saving}
@@ -1278,10 +1239,7 @@ function EnhancePage() {
                 حفظ في مكتبتي
               </button>
               <button
-                onClick={() => {
-                  setOutputUrl(null);
-                  setOutputBlob(null);
-                }}
+                onClick={clearOutput}
                 className="inline-flex items-center gap-2 rounded-xl border border-border bg-card px-4 py-2.5 text-sm hover:bg-secondary transition text-muted-foreground"
               >
                 <RefreshCw className="size-4" /> معالجة جديدة

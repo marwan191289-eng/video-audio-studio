@@ -10,7 +10,7 @@ import { fileURLToPath, pathToFileURL } from "url";
 import { spawn, execFileSync } from "child_process";
 import Busboy from "busboy";
 import { createRequire } from "module";
-import { mkdir, writeFile, readFile, unlink, readdir, rm } from "fs/promises";
+import { mkdir, writeFile, readFile, unlink, readdir, rm, stat } from "fs/promises";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 5000;
@@ -368,7 +368,9 @@ const server = http.createServer(async (req, res) => {
 
     // ── GET /api/job-result/:id ─────────────────────────────────────────
     if (urlPath.startsWith("/api/job-result/") && req.method === "GET") {
-      const jobId = urlPath.slice("/api/job-result/".length);
+      const jobId = urlPath.slice("/api/job-result/".length).split("?")[0];
+      const parsedUrl = new URL(req.url, "http://localhost");
+      const isDl = parsedUrl.searchParams.get("dl") === "1";
       const job = _jobs.get(jobId);
       if (!job || job.status !== "done" || !job.outputPath) {
         res.writeHead(404, { "Content-Type": "application/json", ...SECURITY_HEADERS });
@@ -376,7 +378,8 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       try {
-        const buf = await readFile(job.outputPath);
+        const fileStats = await stat(job.outputPath);
+        const fileSize = fileStats.size;
         const ext = job.ext;
         const mime =
           ext === "mp3" ? "audio/mpeg"
@@ -385,14 +388,37 @@ const server = http.createServer(async (req, res) => {
           : ext === "wav" ? "audio/wav"
           : ext === "webm" ? "video/webm"
           : "video/mp4";
-        const outputPath = job.outputPath;
-        setTimeout(() => { unlink(outputPath).catch(() => {}); _jobs.delete(jobId); }, 30_000);
-        res.writeHead(200, {
+
+        if (!job._cleanupScheduled) {
+          job._cleanupScheduled = true;
+          const outputPath = job.outputPath;
+          setTimeout(() => { unlink(outputPath).catch(() => {}); _jobs.delete(jobId); }, 10 * 60_000);
+        }
+
+        const baseHeaders = {
           "Content-Type": mime,
-          "Content-Length": String(buf.length),
+          "Accept-Ranges": "bytes",
           ...SECURITY_HEADERS,
-        });
-        res.end(buf);
+        };
+        if (isDl) baseHeaders["Content-Disposition"] = `attachment; filename="enhanced.${ext}"`;
+
+        const rangeHeader = req.headers["range"];
+        if (rangeHeader) {
+          const m = rangeHeader.match(/bytes=(\d+)-(\d*)/);
+          if (m) {
+            const start = parseInt(m[1], 10);
+            const end = m[2] ? parseInt(m[2], 10) : fileSize - 1;
+            res.writeHead(206, {
+              ...baseHeaders,
+              "Content-Range": `bytes ${start}-${end}/${fileSize}`,
+              "Content-Length": String(end - start + 1),
+            });
+            fs.createReadStream(job.outputPath, { start, end }).pipe(res);
+            return;
+          }
+        }
+        res.writeHead(200, { ...baseHeaders, "Content-Length": String(fileSize) });
+        fs.createReadStream(job.outputPath).pipe(res);
       } catch (err) {
         res.writeHead(500, { "Content-Type": "application/json", ...SECURITY_HEADERS });
         res.end(JSON.stringify({ error: "Failed to read result" }));

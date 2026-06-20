@@ -618,7 +618,8 @@ export default {
 
     // ── /api/job-result/:id — تحميل النتيجة ─────────────────────────────────
     if (pathname.startsWith("/api/job-result/") && request.method === "GET") {
-      const jobId = pathname.slice("/api/job-result/".length);
+      const jobId = pathname.slice("/api/job-result/".length).split("?")[0];
+      const isDl = new URL(request.url).searchParams.get("dl") === "1";
       const job = _jobs.get(jobId);
       if (!job || job.status !== "done" || !job.outputPath) {
         return new Response(JSON.stringify({ error: "Result not ready" }), {
@@ -627,9 +628,10 @@ export default {
         });
       }
       try {
-        const { readFile } = await import("fs/promises");
-        const buf = await readFile(job.outputPath);
-        const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+        const { stat } = await import("fs/promises");
+        const { createReadStream } = await import("fs");
+        const fileStats = await stat(job.outputPath);
+        const fileSize = fileStats.size;
         const ext = job.ext;
         const mime =
           ext === "mp3" ? "audio/mpeg"
@@ -638,18 +640,51 @@ export default {
           : ext === "wav" ? "audio/wav"
           : ext === "webm" ? "video/webm"
           : "video/mp4";
-        const outputPath = job.outputPath;
-        setTimeout(() => {
-          import("fs/promises").then(({ unlink }) => unlink(outputPath).catch(() => {}));
-          _jobs.delete(jobId);
-        }, 30_000);
-        return new Response(ab, {
-          status: 200,
-          headers: {
-            "Content-Type": mime,
-            "Content-Length": String(buf.byteLength),
-            "Cross-Origin-Resource-Policy": "cross-origin",
+
+        if (!job._cleanupScheduled) {
+          job._cleanupScheduled = true;
+          const outputPath = job.outputPath;
+          setTimeout(() => {
+            import("fs/promises").then(({ unlink }) => unlink(outputPath).catch(() => {}));
+            _jobs.delete(jobId);
+          }, 10 * 60_000);
+        }
+
+        const baseHeaders: Record<string, string> = {
+          "Content-Type": mime,
+          "Accept-Ranges": "bytes",
+          "Cross-Origin-Resource-Policy": "cross-origin",
+        };
+        if (isDl) baseHeaders["Content-Disposition"] = `attachment; filename="enhanced.${ext}"`;
+
+        const rangeHeader = request.headers.get("range");
+        const makeStream = (start?: number, end?: number) => new ReadableStream({
+          start(controller) {
+            const s = createReadStream(job.outputPath!, start !== undefined ? { start, end } : undefined);
+            s.on("data", (chunk) => controller.enqueue(typeof chunk === "string" ? Buffer.from(chunk) : chunk));
+            s.on("end", () => controller.close());
+            s.on("error", (err) => controller.error(err));
           },
+        });
+
+        if (rangeHeader) {
+          const m = rangeHeader.match(/bytes=(\d+)-(\d*)/);
+          if (m) {
+            const start = parseInt(m[1], 10);
+            const end = m[2] ? parseInt(m[2], 10) : fileSize - 1;
+            return new Response(makeStream(start, end), {
+              status: 206,
+              headers: {
+                ...baseHeaders,
+                "Content-Range": `bytes ${start}-${end}/${fileSize}`,
+                "Content-Length": String(end - start + 1),
+              },
+            });
+          }
+        }
+        return new Response(makeStream(), {
+          status: 200,
+          headers: { ...baseHeaders, "Content-Length": String(fileSize) },
         });
       } catch (err) {
         return new Response(JSON.stringify({ error: "Failed to read result" }), {

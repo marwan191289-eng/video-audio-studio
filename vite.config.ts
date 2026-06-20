@@ -314,7 +314,8 @@ function cloudEnhanceDevPlugin(): Plugin {
 
         // ── GET /api/job-result/:id ────────────────────────────────────────
         if (pathname.startsWith("/api/job-result/") && method === "GET") {
-          const jobId = pathname.slice("/api/job-result/".length);
+          const jobId = pathname.slice("/api/job-result/".length).split("?")[0];
+          const isDl = (req.url ?? "").includes("dl=1");
           const job = _jobs.get(jobId);
           if (!job || job.status !== "done" || !job.outputPath) {
             res.writeHead(404, { "Content-Type": "application/json" });
@@ -322,8 +323,10 @@ function cloudEnhanceDevPlugin(): Plugin {
             return;
           }
           try {
-            const { readFile } = await import("fs/promises");
-            const buf = await readFile(job.outputPath);
+            const { stat } = await import("fs/promises");
+            const { createReadStream } = await import("fs");
+            const fileStats = await stat(job.outputPath);
+            const fileSize = fileStats.size;
             const ext = job.ext;
             const mime =
               ext === "mp3" ? "audio/mpeg"
@@ -332,17 +335,40 @@ function cloudEnhanceDevPlugin(): Plugin {
               : ext === "wav" ? "audio/wav"
               : ext === "webm" ? "video/webm"
               : "video/mp4";
-            const outputPath = job.outputPath;
-            setTimeout(() => {
-              import("fs/promises").then(({ unlink }) => unlink(outputPath).catch(() => {}));
-              _jobs.delete(jobId);
-            }, 30_000);
-            res.writeHead(200, {
+
+            if (!job._cleanupScheduled) {
+              job._cleanupScheduled = true;
+              const outputPath = job.outputPath;
+              setTimeout(() => {
+                import("fs/promises").then(({ unlink }) => unlink(outputPath).catch(() => {}));
+                _jobs.delete(jobId);
+              }, 10 * 60_000);
+            }
+
+            const rangeHeader = req.headers["range"];
+            const baseHeaders: Record<string, string> = {
               "Content-Type": mime,
-              "Content-Length": String(buf.length),
+              "Accept-Ranges": "bytes",
               "Cross-Origin-Resource-Policy": "cross-origin",
-            });
-            res.end(buf);
+            };
+            if (isDl) baseHeaders["Content-Disposition"] = `attachment; filename="enhanced.${ext}"`;
+
+            if (rangeHeader) {
+              const m = rangeHeader.match(/bytes=(\d+)-(\d*)/);
+              if (m) {
+                const start = parseInt(m[1], 10);
+                const end = m[2] ? parseInt(m[2], 10) : fileSize - 1;
+                res.writeHead(206, {
+                  ...baseHeaders,
+                  "Content-Range": `bytes ${start}-${end}/${fileSize}`,
+                  "Content-Length": String(end - start + 1),
+                });
+                createReadStream(job.outputPath, { start, end }).pipe(res);
+                return;
+              }
+            }
+            res.writeHead(200, { ...baseHeaders, "Content-Length": String(fileSize) });
+            createReadStream(job.outputPath).pipe(res);
           } catch {
             res.writeHead(500, { "Content-Type": "application/json" });
             res.end(JSON.stringify({ error: "Failed to read result" }));
