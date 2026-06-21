@@ -94,7 +94,7 @@ const Q = ["-c:v", "libx264", "-preset", "fast", "-tune", "film", "-pix_fmt", "y
 
 const EXEC_ARGS: Record<string, (inName: string, outName: string) => string[]> = {
   "auto-enhance": (i, o) => ["-y", "-i", i, "-vf",
-    "hqdn3d=3.5:2.5:5:4,atadenoise=0d=5:1d=5:2d=5:s=9,eq=brightness=0.04:contrast=1.12:saturation=1.32:gamma=0.93,curves=all='0/0 0.28/0.24 0.72/0.76 1/1',unsharp=5:5:0.85:3:3:0.4",
+    "hqdn3d=3.5:2.5:5:4,atadenoise=s=9,eq=brightness=0.04:contrast=1.12:saturation=1.32:gamma=0.93,curves=all='0/0 0.28/0.24 0.72/0.76 1/1',unsharp=5:5:0.85:3:3:0.4",
     ...Q, "-crf", "19", "-c:a", "aac", "-b:a", "192k", o],
 
   "upscale": (i, o) => ["-y", "-i", i, "-vf",
@@ -107,7 +107,7 @@ const EXEC_ARGS: Record<string, (inName: string, outName: string) => string[]> =
     "-c:a", "aac", "-b:a", "160k", o],
 
   "denoise": (i, o) => ["-y", "-i", i, "-vf",
-    "hqdn3d=4.5:3.5:7:5.5,atadenoise=0d=5:1d=5:2d=5:s=9,unsharp=3:3:0.2",
+    "hqdn3d=4.5:3.5:7:5.5,atadenoise=s=9,unsharp=3:3:0.2",
     ...Q, "-crf", "19", "-c:a", "copy", o],
 
   "color-grade": (i, o) => ["-y", "-i", i, "-vf",
@@ -159,15 +159,48 @@ function AnalyzePage() {
     const args = builderFn(inName, outName);
     setExecBusy(mode); setExecProgress(5); setExecError(null); setExecResult(null);
     try {
-      setExecProgress(15);
+      // Start async job — returns immediately with jobId
       const fd = new FormData();
       fd.append("file", file, inName);
       fd.append("args", JSON.stringify(args));
       fd.append("outputName", outName);
-      const res = await fetch("/api/cloud-exec", { method: "POST", body: fd });
-      if (!res.ok) throw new Error(await res.text());
-      setExecProgress(85);
-      const blob = await res.blob();
+      fd.append("inputName", inName);
+      setExecProgress(10);
+      const startRes = await fetch("/api/terminal-exec-async", { method: "POST", body: fd });
+      if (!startRes.ok) throw new Error(await startRes.text());
+      const { jobId } = await startRes.json() as { jobId: string };
+      setExecProgress(20);
+
+      // Poll until done
+      let pollErrors = 0;
+      while (true) {
+        await new Promise(r => setTimeout(r, 2000));
+        let job: { status: string; progress?: number; error?: string };
+        try {
+          const pollRes = await fetch(`/api/job/${jobId}`);
+          if (!pollRes.ok) { pollErrors++; if (pollErrors > 5) throw new Error("فقدان الاتصال بالسيرفر"); continue; }
+          job = await pollRes.json();
+          pollErrors = 0;
+        } catch (e) {
+          pollErrors++;
+          if (pollErrors > 5) throw e;
+          continue;
+        }
+        if (job.status === "processing") {
+          const pct = job.progress ?? 0;
+          if (pct > 0) setExecProgress(20 + Math.round(pct * 0.75));
+        } else if (job.status === "done") {
+          break;
+        } else if (job.status === "failed" || job.status === "cancelled") {
+          throw new Error(job.error || job.status);
+        }
+      }
+
+      // Fetch result
+      setExecProgress(95);
+      const dlRes = await fetch(`/api/job-result/${jobId}?dl=1`);
+      if (!dlRes.ok) throw new Error("فشل جلب الملف الناتج من السيرفر");
+      const blob = await dlRes.blob();
       setExecProgress(100);
       setExecResult({
         url: URL.createObjectURL(new Blob([await blob.arrayBuffer()], { type: "video/mp4" })),

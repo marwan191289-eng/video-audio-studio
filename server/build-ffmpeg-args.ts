@@ -71,7 +71,7 @@ export function buildFFmpegArgs(
     if (settings.denoiseFilter === "hqdn3d")
       vf.push("hqdn3d=4:3:6:4.5");
     else if (settings.denoiseFilter === "nlmeans")
-      vf.push("hqdn3d=6:5:8:6,atadenoise=0d=8:1d=8:2d=8:s=9");
+      vf.push("hqdn3d=6:5:8:6,atadenoise=s=9");
     vf.push(`eq=brightness=${b}:contrast=${c}:saturation=${s}:gamma=${g}`);
     const sh = settings.sharpness ?? 0;
     if (sh > 0) vf.push(`unsharp=5:5:${sh.toFixed(2)}:3:3:${(sh * 0.4).toFixed(2)}`);
@@ -92,7 +92,7 @@ export function buildFFmpegArgs(
     } else if (level === "strong") {
       vf.push(
         "hqdn3d=5:4:8:6",
-        "atadenoise=0d=8:1d=8:2d=8:s=9",
+        "atadenoise=s=9",
         "eq=brightness=0.05:contrast=1.16:saturation=1.42:gamma=0.91",
         "curves=all='0/0 0.3/0.26 0.7/0.75 1/1'",
         "unsharp=7:7:1.0:5:5:0.5",
@@ -101,7 +101,7 @@ export function buildFFmpegArgs(
       // Balanced — flagship "WOW" mode
       vf.push(
         "hqdn3d=3.5:2.5:5:4",
-        "atadenoise=0d=5:1d=5:2d=5:s=9",
+        "atadenoise=s=9",
         "eq=brightness=0.04:contrast=1.12:saturation=1.32:gamma=0.93",
         "curves=all='0/0 0.28/0.24 0.72/0.76 1/1'",
         "unsharp=5:5:0.85:3:3:0.4",
@@ -126,8 +126,8 @@ export function buildFFmpegArgs(
   if (mode === "denoise") {
     const map: Record<string, string> = {
       light:  "hqdn3d=2.5:1.5:3.5:3,unsharp=3:3:0.3:2:2:0.1",
-      medium: "hqdn3d=4.5:3.5:7:5.5,atadenoise=0d=5:1d=5:2d=5:s=9,unsharp=3:3:0.2",
-      strong: "hqdn3d=7:6:12:9,atadenoise=0d=12:1d=12:2d=12:s=9,unsharp=3:3:0.15",
+      medium: "hqdn3d=4.5:3.5:7:5.5,atadenoise=s=9,unsharp=3:3:0.2",
+      strong: "hqdn3d=7:6:12:9,atadenoise=s=9,unsharp=3:3:0.15",
     };
     const f = map[settings.denoiseStrength ?? "medium"];
     return [...base, "-vf", f, ...encodeArgs(19), outFile];
@@ -312,7 +312,7 @@ export function buildFFmpegArgs(
   return [
     ...base,
     "-vf",
-    "hqdn3d=3.5:2.5:5:4,atadenoise=0d=5:1d=5:2d=5:s=9,eq=brightness=0.04:contrast=1.12:saturation=1.32:gamma=0.93,curves=all='0/0 0.28/0.24 0.72/0.76 1/1',unsharp=5:5:0.85:3:3:0.4",
+    "hqdn3d=3.5:2.5:5:4,atadenoise=s=9,eq=brightness=0.04:contrast=1.12:saturation=1.32:gamma=0.93,curves=all='0/0 0.28/0.24 0.72/0.76 1/1',unsharp=5:5:0.85:3:3:0.4",
     ...encodeArgs(19),
     outFile,
   ];
