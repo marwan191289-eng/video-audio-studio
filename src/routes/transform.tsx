@@ -886,7 +886,7 @@ function TransformPage() {
                     <div className="flex items-center gap-3">
                       <input
                         type="color"
-                        value={bgColor}
+                        value={bgColor || "#00ff00"}
                         onChange={(e) => setBgColor(e.target.value)}
                         aria-label="اختر لون الخلفية الحالية"
                         title="اختر لون الخلفية الحالية"
@@ -954,7 +954,7 @@ function TransformPage() {
                       <div className="flex items-center gap-3">
                         <input
                           type="color"
-                          value={bgSolid}
+                          value={bgSolid || "#000000"}
                           onChange={(e) => setBgSolid(e.target.value)}
                           aria-label="اختر لون الخلفية الصلبة"
                           className="size-9 rounded-lg cursor-pointer border border-border bg-transparent"
@@ -1051,7 +1051,7 @@ function TransformPage() {
                       <span className="text-xs text-muted-foreground">لون التغطية</span>
                       <input
                         type="color"
-                        value={defaultFaceColor}
+                        value={defaultFaceColor || "#000000"}
                         onChange={(e) => setDefaultFaceColor(e.target.value)}
                         aria-label="اختر لون التغطية"
                         className="size-8 rounded cursor-pointer border border-border bg-transparent"

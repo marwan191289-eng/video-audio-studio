@@ -682,7 +682,7 @@ function CaptionsPage() {
                 <div>
                   <label className="text-xs text-muted-foreground block mb-1.5">لون النص</label>
                   <div className="flex items-center gap-2">
-                    <input type="color" value={burnStyle.textColor} onChange={e => setBurnStyle(s => ({ ...s, textColor: e.target.value }))}
+                    <input type="color" value={burnStyle.textColor || "#000000"} onChange={e => setBurnStyle(s => ({ ...s, textColor: e.target.value }))}
                       className="size-9 rounded-lg border border-border cursor-pointer bg-background p-0.5" />
                     <input value={burnStyle.textColor} onChange={e => setBurnStyle(s => ({ ...s, textColor: e.target.value }))}
                       className="flex-1 rounded-xl border border-border bg-background px-2.5 py-2 text-xs font-mono focus:border-orange-500 outline-none" />
@@ -692,7 +692,7 @@ function CaptionsPage() {
                 <div>
                   <label className="text-xs text-muted-foreground block mb-1.5">لون الإطار</label>
                   <div className="flex items-center gap-2">
-                    <input type="color" value={burnStyle.outlineColor} onChange={e => setBurnStyle(s => ({ ...s, outlineColor: e.target.value }))}
+                    <input type="color" value={burnStyle.outlineColor || "#000000"} onChange={e => setBurnStyle(s => ({ ...s, outlineColor: e.target.value }))}
                       className="size-9 rounded-lg border border-border cursor-pointer bg-background p-0.5" />
                     <input value={burnStyle.outlineColor} onChange={e => setBurnStyle(s => ({ ...s, outlineColor: e.target.value }))}
                       className="flex-1 rounded-xl border border-border bg-background px-2.5 py-2 text-xs font-mono focus:border-orange-500 outline-none" />

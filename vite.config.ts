@@ -879,6 +879,10 @@ export default defineConfig({
     port: 5000,
     host: "0.0.0.0",
     allowedHosts: true,
+    hmr: {
+      clientPort: 443,
+      timeout: 120000,
+    },
     headers: {
       "Cross-Origin-Opener-Policy": "same-origin",
       "Cross-Origin-Embedder-Policy": "require-corp",

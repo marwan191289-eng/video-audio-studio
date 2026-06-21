@@ -644,7 +644,7 @@ function WatermarkPage() {
                   <span className="text-xs text-muted-foreground">لون التغطية</span>
                   <input
                     type="color"
-                    value={defaultFill}
+                    value={defaultFill || "#000000"}
                     onChange={(e) => setDefaultFill(e.target.value)}
                     className="size-8 rounded cursor-pointer border border-border bg-transparent"
                   />
@@ -767,7 +767,7 @@ function WatermarkPage() {
                               <span className="text-[10px] text-muted-foreground">اللون</span>
                               <input
                                 type="color"
-                                value={r.fillColor}
+                                value={r.fillColor || "#000000"}
                                 onClick={(e) => e.stopPropagation()}
                                 onChange={(e) => patchRegion(r.id, { fillColor: e.target.value })}
                                 className="size-6 rounded cursor-pointer border border-border bg-transparent"
