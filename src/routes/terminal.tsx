@@ -224,7 +224,7 @@ function TerminalPage() {
         const d = (await ffmpeg.readFile(name)) as Uint8Array;
         const ext = name.split(".").pop()?.toLowerCase() || "";
         const mime = ext === "mp3" ? "audio/mpeg" : ext === "gif" ? "image/gif" : ext === "jpg" || ext === "jpeg" ? "image/jpeg" : ext === "png" ? "image/png" : "video/mp4";
-        const url = URL.createObjectURL(new Blob([d.buffer as ArrayBuffer], { type: mime }));
+        const url = URL.createObjectURL(new Blob([d], { type: mime }));
         const a = document.createElement("a");
         a.href = url; a.download = name; a.click();
         setTimeout(() => URL.revokeObjectURL(url), 5000);

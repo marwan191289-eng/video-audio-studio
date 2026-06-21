@@ -550,7 +550,7 @@ function TransformPage() {
         }
         await ffmpeg.exec(["-i", inName, ...preArgs, ...postArgs]);
         const data = (await ffmpeg.readFile(outName)) as Uint8Array;
-        const blob = new Blob([data.buffer as ArrayBuffer], { type: "video/mp4" });
+        const blob = new Blob([data], { type: "video/mp4" });
         setOutputUrl(URL.createObjectURL(blob));
         setOutputName(`${file.name.replace(/\.[^.]+$/, "")}_transformed.mp4`);
         toast_("اكتملت التحويلات بنجاح!", "ok");

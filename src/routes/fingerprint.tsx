@@ -133,8 +133,7 @@ function FingerprintPage() {
 
       await ffmpeg.exec(args);
       const data = (await ffmpeg.readFile(outName)) as Uint8Array;
-      const blob = new Blob([data.buffer as ArrayBuffer], { type: "video/mp4" });
-      setOutputUrl(URL.createObjectURL(blob));
+      setOutputUrl(URL.createObjectURL(new Blob([data], { type: "video/mp4" })));
       appendLog("✓ تم تغيير البصمة الرقمية بنجاح");
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e) || "حدث خطأ";

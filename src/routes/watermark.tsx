@@ -352,17 +352,11 @@ function WatermarkPage() {
       setFfLog(logs.slice(-3).join("\n"));
     };
     try {
-      const ffmpeg = await getFFmpeg(handler);
-      ffmpeg.on("progress", ({ progress: p }) =>
-        setProgress(Math.round(Math.max(0, Math.min(100, p * 100)))),
-      );
-
       const ext = file.name.split(".").pop()?.toLowerCase() || "mp4";
       const inName = `wm_in.${ext}`;
-      await ffmpeg.writeFile(inName, await fetchFile(file));
       const audio = hasAudioByExt(inName);
-
       const { args, outName } = buildFiltergraph(regions, audio);
+
       if (processMode === "cloud") {
         setProgress(20);
         const cloudArgs = ["-i", inName, ...args];
@@ -374,22 +368,28 @@ function WatermarkPage() {
         if (!cloudRes.ok) throw new Error("خطأ سحابي: " + (await cloudRes.text()).slice(0, 200));
         const resBlob = await cloudRes.blob();
         setProgress(100);
-        setOutputUrl(URL.createObjectURL(new Blob([await resBlob.arrayBuffer()], { type: "video/mp4" })));
+        setOutputUrl(URL.createObjectURL(resBlob));
         setOutputName(`${file.name.replace(/\.[^.]+$/, "")}_clean.mp4`);
         toast_("اكتملت إزالة العلامات المائية! ☁", "ok");
       } else {
+        if (file.size > 200 * 1024 * 1024) {
+          throw new Error("الملف أكبر من 200MB — استخدم وضع السحابة لتجنب امتلاء ذاكرة المتصفح");
+        }
+        const ffmpeg = await getFFmpeg(handler);
+        ffmpeg.on("progress", ({ progress: p }) =>
+          setProgress(Math.round(Math.max(0, Math.min(100, p * 100)))),
+        );
+        await ffmpeg.writeFile(inName, await fetchFile(file));
         await ffmpeg.exec(["-i", inName, ...args]);
         const data = (await ffmpeg.readFile(outName)) as Uint8Array;
-        const blob = new Blob([data.buffer as ArrayBuffer], { type: "video/mp4" });
-        setOutputUrl(URL.createObjectURL(blob));
+        setOutputUrl(URL.createObjectURL(new Blob([data], { type: "video/mp4" })));
         setOutputName(`${file.name.replace(/\.[^.]+$/, "")}_clean.mp4`);
         toast_("اكتملت المعالجة!", "ok");
+        await ffmpeg.deleteFile(inName).catch(() => {});
+        await ffmpeg.deleteFile(outName).catch(() => {});
       }
-
-      await ffmpeg.deleteFile(inName).catch(() => {});
-      await ffmpeg.deleteFile(outName).catch(() => {});
     } catch (e) {
-      toast_(e instanceof Error ? e.message.slice(0, 120) : "حدث خطأ", "err");
+      toast_(e instanceof Error ? e.message.slice(0, 160) : "حدث خطأ", "err");
     } finally {
       removeLogHandler(handler);
       setProcessing(false);

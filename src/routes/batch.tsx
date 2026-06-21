@@ -386,7 +386,7 @@ function BatchPage() {
           : outName.endsWith(".gif")
             ? "image/gif"
             : "video/mp4";
-        const blob = new Blob([data.buffer as ArrayBuffer], { type: mime });
+        const blob = new Blob([data], { type: mime });
         const url = URL.createObjectURL(blob);
 
         const baseName = entry.file.name.replace(/\.[^.]+$/, "");

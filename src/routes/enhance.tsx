@@ -697,7 +697,7 @@ function EnhancePage() {
           : outName.endsWith(".jpg")
             ? "image/jpeg"
             : "video/mp4";
-      const blob = new Blob([data.buffer as ArrayBuffer], { type: mime });
+      const blob = new Blob([data], { type: mime });
       setOutputBlob(blob);
       setOutputName(outName);
       setOutputUrl(URL.createObjectURL(blob));

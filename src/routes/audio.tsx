@@ -206,16 +206,9 @@ function AudioPage() {
     const logHandler = (m: string) => appendLog(m);
 
     try {
-      const ffmpeg = await getFFmpeg(logHandler);
-      setLoadingFFmpeg(false);
-      ffmpeg.on("progress", ({ progress: p }) =>
-        setProgress(Math.max(progress, Math.round(p * 100))),
-      );
-
       const ext = file.name.split(".").pop()?.toLowerCase() || "mp4";
       const isAudio = ["mp3", "wav", "aac", "ogg", "flac", "m4a", "opus"].includes(ext);
       const inputName = `input.${ext}`;
-      await ffmpeg.writeFile(inputName, await fetchFile(file));
 
       let outName = isAudio ? "output.mp3" : "output.mp4";
       let args: string[] = [];
@@ -227,7 +220,6 @@ function AudioPage() {
         args = ["-i", inputName, "-c:v", "copy", "-an", outName];
       } else if (mode === "replace" && audioFile) {
         const aExt = audioFile.name.split(".").pop() || "mp3";
-        await ffmpeg.writeFile(`music.${aExt}`, await fetchFile(audioFile));
         args = [
           "-i",
           inputName,
@@ -329,7 +321,7 @@ function AudioPage() {
           : ["-i", inputName, "-af", af, "-c:v", "copy", outName];
       }
 
-      if (processMode === "cloud") {
+      if (processMode === "cloud" && mode !== "replace") {
         setProgress(20);
         const fd = new FormData();
         fd.append("file", file, inputName);
@@ -341,17 +333,31 @@ function AudioPage() {
         setProgress(100);
         const mime2 = outName.endsWith(".mp3") ? "audio/mpeg" : "video/mp4";
         setOutputName(outName);
-        setOutputUrl(URL.createObjectURL(new Blob([await resBlob.arrayBuffer()], { type: mime2 })));
+        setOutputUrl(URL.createObjectURL(new Blob([resBlob], { type: mime2 })));
         showToast("✓ اكتملت المعالجة السحابية! ☁", "ok");
       } else {
+        if (file.size > 200 * 1024 * 1024) {
+          throw new Error("الملف أكبر من 200MB — استخدم وضع السحابة لتجنب امتلاء ذاكرة المتصفح");
+        }
+        const ffmpeg = await getFFmpeg(logHandler);
+        setLoadingFFmpeg(false);
+        ffmpeg.on("progress", ({ progress: p }) =>
+          setProgress(Math.max(progress, Math.round(p * 100))),
+        );
+        await ffmpeg.writeFile(inputName, await fetchFile(file));
+        if (mode === "replace" && audioFile) {
+          const aExt = audioFile.name.split(".").pop() || "mp3";
+          await ffmpeg.writeFile(`music.${aExt}`, await fetchFile(audioFile));
+        }
         await ffmpeg.exec(args);
         setProgress(100);
         const data = (await ffmpeg.readFile(outName)) as Uint8Array;
         const mime = outName.endsWith(".mp3") ? "audio/mpeg" : "video/mp4";
-        const blob = new Blob([data.buffer as ArrayBuffer], { type: mime });
         setOutputName(outName);
-        setOutputUrl(URL.createObjectURL(blob));
+        setOutputUrl(URL.createObjectURL(new Blob([data], { type: mime })));
         showToast("✓ اكتملت المعالجة!", "ok");
+        await ffmpeg.deleteFile(inputName).catch(() => {});
+        await ffmpeg.deleteFile(outName).catch(() => {});
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e) || "حدث خطأ";
