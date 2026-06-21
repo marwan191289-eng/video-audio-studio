@@ -102,7 +102,7 @@ function buildFiltergraph(
 ): { args: string[]; outName: string } {
   const outName = "wm_out.mp4";
   const audioArgs = hasAudio ? ["-map", "0:a", "-c:a", "copy"] : ["-an"];
-  const qualArgs = ["-c:v", "libx264", "-preset", "slow", "-crf", "17"];
+  const qualArgs = ["-c:v", "libx264", "-preset", "fast", "-crf", "17"];
 
   if (regions.length === 0) {
     return { args: ["-c:v", "copy", ...audioArgs, outName], outName };
@@ -124,8 +124,7 @@ function buildFiltergraph(
           `drawbox=x=${r.x}:y=${r.y}:w=${r.w}:h=${r.h}:color=${r.fillColor.replace("#", "0x")}@1:t=fill`,
         );
     }
-    const delogoChain = parts.join(",");
-    const vf = delogoChain + (regions.some(r => r.mode === "delogo") ? ",unsharp=3:3:0.4" : "");
+    const vf = parts.join(",");
     return {
       args: ["-vf", vf, ...qualArgs, ...audioArgs, outName],
       outName,
@@ -150,19 +149,13 @@ function buildFiltergraph(
       );
     } else {
       const [mn, sp, bl] = [`mn${n}`, `sp${n}`, `bl${n}`];
-      const bs = Math.round(r.blurStrength / 2) * 2 + 1;
+      const bs = Math.max(1, Math.round(r.blurStrength / 2));
       parts.push(`[${stream}]split=2[${mn}][${sp}]`);
-      parts.push(`[${sp}]crop=${r.w}:${r.h}:${r.x}:${r.y},boxblur=${bs}[${bl}]`);
+      parts.push(`[${sp}]crop=${r.w}:${r.h}:${r.x}:${r.y},avgblur=${bs}[${bl}]`);
       parts.push(`[${mn}][${bl}]overlay=${r.x}:${r.y}[${out}]`);
     }
     stream = out;
     n++;
-  }
-
-  const hasDelogo = regions.some(r => r.mode === "delogo");
-  if (hasDelogo) {
-    parts.push(`[${stream}]unsharp=3:3:0.4[voFinal]`);
-    stream = "voFinal";
   }
 
   return {
@@ -587,6 +580,9 @@ function WatermarkPage() {
         await ffmpeg.writeFile(inName, await fetchFile(file));
         await ffmpeg.exec(["-i", inName, ...args]);
         const data = (await ffmpeg.readFile(outName)) as Uint8Array;
+        if (data.byteLength < 1024) {
+          throw new Error("فشل FFmpeg في إنتاج ملف الفيديو — جرّب وضع السحابة أو تحقق من صيغة الملف");
+        }
         setOutputUrl(URL.createObjectURL(new Blob([data], { type: "video/mp4" })));
         setOutputName(`${file.name.replace(/\.[^.]+$/, "")}_clean.mp4`);
         toast_("اكتملت المعالجة!", "ok");
@@ -709,7 +705,7 @@ function WatermarkPage() {
                     <canvas
                       ref={canvasRef}
                       width={800}
-                      height={Math.round(800 * (videoMeta.h / videoMeta.w))}
+                      height={videoMeta.w > 0 ? Math.round(800 * (videoMeta.h / videoMeta.w)) : 450}
                       className="w-full cursor-crosshair block"
                       onMouseDown={onDown}
                       onMouseMove={onMove}
