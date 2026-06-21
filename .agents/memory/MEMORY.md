@@ -2,3 +2,5 @@
 - [FFmpeg.wasm root cause fix](ffmpeg-wasm-root-cause.md) — Vite creates a module worker; importScripts fails; must use ESM @ffmpeg/core (has export default) + toBlobURL for both files. UMD core always fails silently.
 - [h3-v2 Replit migration](h3-v2-replit.md) — @tanstack/react-start requires h3-v2 (blocked by Replit firewall); must manually extract tarball from registry into node_modules/h3-v2/ then bun install will succeed.
 - [Rendi API integration](rendi-api.md) — auth=X-Api-Key header; POST /v1/run-ffmpeg-command; poll status="SUCCESS"; free plan blocks non-sample URLs (need paid plan).
+- [FFmpeg -map flag kills video stream](ffmpeg-map-vf-bug.md) — in simple -vf path, adding -map 0:a after -vf disables implicit video mapping; use -c:a copy without -map; only use -map in filter_complex path.
+- [useLocalSettings SSR hydration](use-local-settings-ssr.md) — hook read localStorage in useState init causing server/client mismatch; fix: always init with defaultValue, read localStorage in useEffect.

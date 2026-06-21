@@ -604,7 +604,7 @@ function WatermarkPage() {
   }
 
   return (
-    <div className="min-h-screen bg-background text-foreground" dir="rtl">
+    <div className="min-h-screen bg-background text-foreground" dir="rtl" suppressHydrationWarning>
       <video ref={hiddenVidRef} className="hidden" muted playsInline crossOrigin="anonymous" />
 
       {toast && (
