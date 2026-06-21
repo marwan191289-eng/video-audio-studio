@@ -446,6 +446,63 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // ── POST /api/captions-exec ──────────────────────────────────────────
+    if (urlPath === "/api/captions-exec" && req.method === "POST") {
+      try {
+        const bb = Busboy({ headers: req.headers });
+        const parts1 = [], parts2 = [];
+        let argsJson = "[]"; let outputName = "output.mp4";
+        let inputName = "input.mp4"; let subtitleName = "subs.srt";
+        let file1Name = "input.mp4"; let fileIndex = 0;
+        bb.on("file", (field, file, info) => {
+          const fname = info?.filename || (fileIndex === 0 ? "input.mp4" : "subs.srt");
+          if (field === "subtitle") {
+            file.on("data", d => parts2.push(d));
+          } else {
+            file1Name = fname;
+            file.on("data", d => parts1.push(d));
+          }
+          fileIndex++;
+        });
+        bb.on("field", (name, value) => {
+          if (name === "args") argsJson = value;
+          if (name === "outputName") outputName = value;
+          if (name === "inputName") inputName = value;
+          if (name === "subtitleName") subtitleName = value;
+        });
+        await new Promise((resolve, reject) => { bb.on("finish", resolve); bb.on("error", reject); req.pipe(bb); });
+        const fileBuffer = Buffer.concat(parts1);
+        const subBuffer = Buffer.concat(parts2);
+        if (!fileBuffer.length) { res.writeHead(400, { "Content-Type": "application/json", ...SECURITY_HEADERS }); res.end(JSON.stringify({ error: "No file" })); return; }
+        const ts = Date.now();
+        const ext1 = (file1Name.split(".").pop() || "mp4").toLowerCase();
+        const outExt = (outputName.split(".").pop() || "mp4").toLowerCase();
+        const tmpIn = path.join(os.tmpdir(), `cap-in-${ts}.${ext1}`);
+        const tmpOut = path.join(os.tmpdir(), `cap-out-${ts}.${outExt}`);
+        const tmpSub = subBuffer.length ? path.join(os.tmpdir(), `cap-sub-${ts}.srt`) : "";
+        await writeFile(tmpIn, fileBuffer);
+        if (tmpSub) await writeFile(tmpSub, subBuffer);
+        try {
+          let args = JSON.parse(argsJson);
+          args = args.map(a => a === inputName ? tmpIn : a === subtitleName ? (tmpSub || a) : a === outputName ? tmpOut : a);
+          if (!args.includes(tmpOut)) args = [...args.slice(0, -1), tmpOut];
+          const { execFileSync } = await import("child_process");
+          execFileSync(FFMPEG_BIN, ["-y", ...args.filter(a => a !== "-y")], { maxBuffer: 200 * 1024 * 1024, timeout: 10 * 60_000 });
+          const outBuf = await readFile(tmpOut);
+          const textExts = ["srt", "vtt", "ass", "ssa", "sbv"];
+          const isText = textExts.includes(outExt);
+          const mime = isText ? "text/plain" : outExt === "mkv" ? "video/x-matroska" : outExt === "mp3" ? "audio/mpeg" : "video/mp4";
+          res.writeHead(200, { "Content-Type": mime, "Content-Disposition": `attachment; filename="${outputName}"`, "Content-Length": String(outBuf.length), ...SECURITY_HEADERS });
+          res.end(outBuf);
+        } finally {
+          unlink(tmpIn).catch(() => {});
+          unlink(tmpOut).catch(() => {});
+          if (tmpSub) unlink(tmpSub).catch(() => {});
+        }
+      } catch (err) { res.writeHead(500, { "Content-Type": "application/json", ...SECURITY_HEADERS }); res.end(JSON.stringify({ error: String(err) })); }
+      return;
+    }
+
     // ── POST /api/cloud-exec ─────────────────────────────────────────────
     if (urlPath === "/api/cloud-exec" && req.method === "POST") {
       try {

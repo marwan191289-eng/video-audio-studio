@@ -20,6 +20,7 @@ import {
   Layers,
   Blend,
   ScanSearch,
+  Languages,
 } from "lucide-react";
 
 export const Route = createFileRoute("/")({
@@ -99,6 +100,14 @@ const features = [
     href: "/batch",
     gradient: "from-violet-500 to-indigo-600",
     badge: "جديد",
+  },
+  {
+    icon: Languages,
+    title: "الترجمات والكابشن",
+    desc: "حرق الترجمات، ترجمات ناعمة، استخراج، محرر SRT كامل، تحويل SRT/VTT/ASS.",
+    href: "/captions",
+    gradient: "from-amber-500 to-orange-600",
+    badge: "6 أدوات",
   },
   {
     icon: Library,

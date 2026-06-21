@@ -15,6 +15,7 @@ import { Route as TerminalRouteImport } from './routes/terminal'
 import { Route as LibraryRouteImport } from './routes/library'
 import { Route as FingerprintRouteImport } from './routes/fingerprint'
 import { Route as EnhanceRouteImport } from './routes/enhance'
+import { Route as CaptionsRouteImport } from './routes/captions'
 import { Route as BatchRouteImport } from './routes/batch'
 import { Route as AudioRouteImport } from './routes/audio'
 import { Route as AnalyzeRouteImport } from './routes/analyze'
@@ -50,6 +51,11 @@ const EnhanceRoute = EnhanceRouteImport.update({
   path: '/enhance',
   getParentRoute: () => rootRouteImport,
 } as any)
+const CaptionsRoute = CaptionsRouteImport.update({
+  id: '/captions',
+  path: '/captions',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const BatchRoute = BatchRouteImport.update({
   id: '/batch',
   path: '/batch',
@@ -76,6 +82,7 @@ export interface FileRoutesByFullPath {
   '/analyze': typeof AnalyzeRoute
   '/audio': typeof AudioRoute
   '/batch': typeof BatchRoute
+  '/captions': typeof CaptionsRoute
   '/enhance': typeof EnhanceRoute
   '/fingerprint': typeof FingerprintRoute
   '/library': typeof LibraryRoute
@@ -88,6 +95,7 @@ export interface FileRoutesByTo {
   '/analyze': typeof AnalyzeRoute
   '/audio': typeof AudioRoute
   '/batch': typeof BatchRoute
+  '/captions': typeof CaptionsRoute
   '/enhance': typeof EnhanceRoute
   '/fingerprint': typeof FingerprintRoute
   '/library': typeof LibraryRoute
@@ -101,6 +109,7 @@ export interface FileRoutesById {
   '/analyze': typeof AnalyzeRoute
   '/audio': typeof AudioRoute
   '/batch': typeof BatchRoute
+  '/captions': typeof CaptionsRoute
   '/enhance': typeof EnhanceRoute
   '/fingerprint': typeof FingerprintRoute
   '/library': typeof LibraryRoute
@@ -115,6 +124,7 @@ export interface FileRouteTypes {
     | '/analyze'
     | '/audio'
     | '/batch'
+    | '/captions'
     | '/enhance'
     | '/fingerprint'
     | '/library'
@@ -127,6 +137,7 @@ export interface FileRouteTypes {
     | '/analyze'
     | '/audio'
     | '/batch'
+    | '/captions'
     | '/enhance'
     | '/fingerprint'
     | '/library'
@@ -139,6 +150,7 @@ export interface FileRouteTypes {
     | '/analyze'
     | '/audio'
     | '/batch'
+    | '/captions'
     | '/enhance'
     | '/fingerprint'
     | '/library'
@@ -152,6 +164,7 @@ export interface RootRouteChildren {
   AnalyzeRoute: typeof AnalyzeRoute
   AudioRoute: typeof AudioRoute
   BatchRoute: typeof BatchRoute
+  CaptionsRoute: typeof CaptionsRoute
   EnhanceRoute: typeof EnhanceRoute
   FingerprintRoute: typeof FingerprintRoute
   LibraryRoute: typeof LibraryRoute
@@ -204,6 +217,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof EnhanceRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/captions': {
+      id: '/captions'
+      path: '/captions'
+      fullPath: '/captions'
+      preLoaderRoute: typeof CaptionsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/batch': {
       id: '/batch'
       path: '/batch'
@@ -240,6 +260,7 @@ const rootRouteChildren: RootRouteChildren = {
   AnalyzeRoute: AnalyzeRoute,
   AudioRoute: AudioRoute,
   BatchRoute: BatchRoute,
+  CaptionsRoute: CaptionsRoute,
   EnhanceRoute: EnhanceRoute,
   FingerprintRoute: FingerprintRoute,
   LibraryRoute: LibraryRoute,

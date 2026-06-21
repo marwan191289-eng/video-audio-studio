@@ -553,6 +553,76 @@ function cloudEnhanceDevPlugin(): Plugin {
           return;
         }
 
+        // ── POST /api/captions-exec ───────────────────────────────────────────
+        if (pathname === "/api/captions-exec" && method === "POST") {
+          try {
+            const [{ default: Busboy }, { writeFile, readFile, unlink }, { tmpdir }, { join }, { execFile }, { promisify }] =
+              await Promise.all([
+                import("busboy"), import("fs/promises"), import("os"), import("path"),
+                import("child_process"), import("util"),
+              ]);
+            const execFileAsync = (promisify as any)(execFile as any) as (
+              cmd: string, args: string[], opts?: object
+            ) => Promise<{ stdout: string; stderr: string }>;
+            const bb = Busboy({ headers: req.headers });
+            const parts1: Buffer[] = [], parts2: Buffer[] = [];
+            let argsJson = "[]"; let outputName = "output.mp4";
+            let inputName = "input.mp4"; let subtitleName = "subs.srt";
+            let file1Name = "input.mp4"; let file2Name = "subs.srt";
+            let fileIndex = 0;
+            bb.on("file", (field: string, file: any, info: any) => {
+              const fname = info?.filename || (fileIndex === 0 ? "input.mp4" : "subs.srt");
+              if (field === "subtitle") {
+                file2Name = fname;
+                file.on("data", (d: Buffer) => parts2.push(d));
+              } else {
+                file1Name = fname;
+                file.on("data", (d: Buffer) => parts1.push(d));
+              }
+              fileIndex++;
+            });
+            bb.on("field", (name: string, value: string) => {
+              if (name === "args") argsJson = value;
+              if (name === "outputName") outputName = value;
+              if (name === "inputName") inputName = value;
+              if (name === "subtitleName") subtitleName = value;
+            });
+            await new Promise<void>((resolve, reject) => { bb.on("finish", resolve); bb.on("error", reject); req.pipe(bb); });
+            const fileBuffer = Buffer.concat(parts1);
+            const subBuffer = Buffer.concat(parts2);
+            if (!fileBuffer.length) { res.writeHead(400, { "Content-Type": "application/json" }); res.end(JSON.stringify({ error: "No file" })); return; }
+            const ts = Date.now();
+            const ext1 = (file1Name.split(".").pop() || "mp4").toLowerCase();
+            const outExt = (outputName.split(".").pop() || "mp4").toLowerCase();
+            const tmpIn = join(tmpdir(), `cap-in-${ts}.${ext1}`);
+            const tmpOut = join(tmpdir(), `cap-out-${ts}.${outExt}`);
+            const tmpSub = subBuffer.length ? join(tmpdir(), `cap-sub-${ts}.srt`) : "";
+            await writeFile(tmpIn, fileBuffer);
+            if (tmpSub) await writeFile(tmpSub, subBuffer);
+            try {
+              let args: string[] = JSON.parse(argsJson);
+              args = args.map(a =>
+                a === inputName ? tmpIn :
+                a === subtitleName ? (tmpSub || a) :
+                a === outputName ? tmpOut : a
+              );
+              if (!args.includes(tmpOut)) args = [...args.slice(0, -1), tmpOut];
+              await execFileAsync("ffmpeg", ["-y", ...args.filter(a => a !== "-y")], { maxBuffer: 200 * 1024 * 1024, timeout: 10 * 60_000 });
+              const outBuf = await readFile(tmpOut);
+              const textExts = ["srt", "vtt", "ass", "ssa", "sbv"];
+              const isText = textExts.includes(outExt);
+              const mime = isText ? "text/plain" : outExt === "mkv" ? "video/x-matroska" : outExt === "mp3" ? "audio/mpeg" : "video/mp4";
+              res.writeHead(200, { "Content-Type": mime, "Content-Disposition": `attachment; filename="${outputName}"`, "Content-Length": String(outBuf.length) });
+              res.end(outBuf);
+            } finally {
+              unlink(tmpIn).catch(() => {});
+              unlink(tmpOut).catch(() => {});
+              if (tmpSub) unlink(tmpSub).catch(() => {});
+            }
+          } catch (err) { res.writeHead(500, { "Content-Type": "application/json" }); res.end(JSON.stringify({ error: String(err) })); }
+          return;
+        }
+
         // ── POST /api/cloud-exec ──────────────────────────────────────────────
         if (pathname === "/api/cloud-exec" && method === "POST") {
           try {
