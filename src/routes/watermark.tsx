@@ -101,11 +101,11 @@ function buildFiltergraph(
   hasAudio: boolean,
 ): { args: string[]; outName: string } {
   const outName = "wm_out.mp4";
-  const audioArgs = hasAudio ? ["-map", "0:a", "-c:a", "copy"] : ["-an"];
   const qualArgs = ["-c:v", "libx264", "-preset", "fast", "-crf", "17"];
 
   if (regions.length === 0) {
-    return { args: ["-c:v", "copy", ...audioArgs, outName], outName };
+    const copyAudio = hasAudio ? ["-c:a", "copy"] : ["-an"];
+    return { args: ["-c:v", "copy", ...copyAudio, outName], outName };
   }
 
   const hasBlur = regions.some((r) => r.mode === "blur");
@@ -125,6 +125,7 @@ function buildFiltergraph(
         );
     }
     const vf = parts.join(",");
+    const audioArgs = hasAudio ? ["-c:a", "copy"] : ["-an"];
     return {
       args: ["-vf", vf, ...qualArgs, ...audioArgs, outName],
       outName,
@@ -158,13 +159,14 @@ function buildFiltergraph(
     n++;
   }
 
+  const complexAudioArgs = hasAudio ? ["-map", "0:a", "-c:a", "copy"] : ["-an"];
   return {
     args: [
       "-filter_complex",
       parts.join(";"),
       "-map",
       `[${stream}]`,
-      ...audioArgs,
+      ...complexAudioArgs,
       ...qualArgs,
       outName,
     ],
@@ -417,8 +419,10 @@ function WatermarkPage() {
       for (let i = 0; i < timestamps.length; i++) {
         const t = timestamps[i] * dur;
         await new Promise<void>((resolve) => {
-          const onSeeked = () => {
-            vid.removeEventListener("seeked", onSeeked);
+          let done = false;
+          const capture = () => {
+            if (done) return;
+            done = true;
             ctx.drawImage(vid, 0, 0, W, H);
             const imgData = ctx.getImageData(0, 0, W, H).data;
             const luma = new Float32Array(W * H);
@@ -428,8 +432,9 @@ function WatermarkPage() {
             frames.push(luma);
             resolve();
           };
-          vid.addEventListener("seeked", onSeeked, { once: true });
+          vid.addEventListener("seeked", capture, { once: true });
           vid.currentTime = t;
+          setTimeout(() => { vid.removeEventListener("seeked", capture); capture(); }, 1200);
         });
         setAutoProgress(Math.round(((i + 1) / timestamps.length) * 60));
       }
@@ -451,8 +456,8 @@ function WatermarkPage() {
 
       setAutoProgress(70);
 
-      const VAR_THRESH = 18;
-      const GRID = 12;
+      const VAR_THRESH = 50;
+      const GRID = 8;
       const gridW = Math.ceil(W / GRID);
       const gridH = Math.ceil(H / GRID);
       const gridStatic = new Uint8Array(gridW * gridH);
@@ -463,12 +468,11 @@ function WatermarkPage() {
           for (let dy = 0; dy < GRID && gy * GRID + dy < H; dy++) {
             for (let dx = 0; dx < GRID && gx * GRID + dx < W; dx++) {
               const px = (gy * GRID + dy) * W + (gx * GRID + dx);
-              const lum = mean[px];
-              if (variance[px] < VAR_THRESH && lum > 15 && lum < 240) staticPx++;
+              if (variance[px] < VAR_THRESH) staticPx++;
               total++;
             }
           }
-          gridStatic[gy * gridW + gx] = staticPx / total > 0.55 ? 1 : 0;
+          gridStatic[gy * gridW + gx] = staticPx / total > 0.4 ? 1 : 0;
         }
       }
 
