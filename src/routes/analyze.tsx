@@ -90,14 +90,37 @@ function formatDuration(sec: number): string {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
+const Q = ["-c:v", "libx264", "-preset", "fast", "-tune", "film", "-pix_fmt", "yuv420p", "-movflags", "+faststart"];
+
 const EXEC_ARGS: Record<string, (inName: string, outName: string) => string[]> = {
-  "auto-enhance": (i, o) => ["-i", i, "-vf", "hqdn3d=3:2:4:3.5,eq=brightness=0.03:contrast=1.1:saturation=1.25:gamma=0.95,unsharp=5:5:0.5", "-c:v", "libx264", "-crf", "20", "-preset", "fast", "-c:a", "copy", o],
-  "upscale":      (i, o) => ["-i", i, "-vf", "scale=1920:1080:flags=lanczos", "-c:v", "libx264", "-crf", "18", "-preset", "fast", "-c:a", "copy", o],
-  "compress":     (i, o) => ["-i", i, "-c:v", "libx264", "-crf", "28", "-preset", "medium", "-c:a", "aac", "-b:a", "128k", o],
-  "denoise":      (i, o) => ["-i", i, "-vf", "hqdn3d=4:3:6:4.5", "-c:v", "libx264", "-crf", "20", "-preset", "fast", "-c:a", "copy", o],
-  "color-grade":  (i, o) => ["-i", i, "-vf", "eq=brightness=0.05:contrast=1.15:saturation=1.3:gamma=0.95", "-c:v", "libx264", "-crf", "20", "-preset", "fast", "-c:a", "copy", o],
-  "fps":          (i, o) => ["-i", i, "-filter:v", "fps=30", "-c:v", "libx264", "-crf", "20", "-preset", "fast", "-c:a", "copy", o],
-  "stabilize":    (i, o) => ["-i", i, "-vf", "vidstabtransform=smoothing=20,unsharp=3:3:0.5", "-c:v", "libx264", "-crf", "20", "-preset", "fast", "-c:a", "copy", o],
+  "auto-enhance": (i, o) => ["-y", "-i", i, "-vf",
+    "hqdn3d=3.5:2.5:5:4,atadenoise=0d=5:1d=5:2d=5:s=9,eq=brightness=0.04:contrast=1.12:saturation=1.32:gamma=0.93,curves=all='0/0 0.28/0.24 0.72/0.76 1/1',unsharp=5:5:0.85:3:3:0.4",
+    ...Q, "-crf", "19", "-c:a", "aac", "-b:a", "192k", o],
+
+  "upscale": (i, o) => ["-y", "-i", i, "-vf",
+    "scale=1920:1080:flags=lanczos+accurate_rnd+full_chroma_inp,unsharp=5:5:0.7:3:3:0.3,eq=brightness=0.02:contrast=1.06:saturation=1.1",
+    ...Q, "-crf", "18", "-c:a", "copy", o],
+
+  "compress": (i, o) => ["-y", "-i", i,
+    "-c:v", "libx264", "-preset", "medium", "-crf", "26",
+    "-tune", "film", "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+    "-c:a", "aac", "-b:a", "160k", o],
+
+  "denoise": (i, o) => ["-y", "-i", i, "-vf",
+    "hqdn3d=4.5:3.5:7:5.5,atadenoise=0d=5:1d=5:2d=5:s=9,unsharp=3:3:0.2",
+    ...Q, "-crf", "19", "-c:a", "copy", o],
+
+  "color-grade": (i, o) => ["-y", "-i", i, "-vf",
+    "eq=contrast=1.12:saturation=0.88:gamma=1.08,curves=r='0/0.02 0.5/0.47 1/0.91':g='0/0 0.5/0.49 1/0.97':b='0/0.05 0.5/0.52 1/1',vignette=PI/5",
+    ...Q, "-crf", "18", "-c:a", "copy", o],
+
+  "fps": (i, o) => ["-y", "-i", i,
+    "-filter:v", "fps=30",
+    ...Q, "-crf", "19", "-c:a", "copy", o],
+
+  "stabilize": (i, o) => ["-y", "-i", i, "-vf",
+    "vidstabtransform=smoothing=30:crop=black:zoom=2:optzoom=1,unsharp=5:5:0.5:3:3:0.3",
+    ...Q, "-crf", "19", "-c:a", "copy", o],
 };
 
 interface ExecResult { url: string; name: string; mode: string; }

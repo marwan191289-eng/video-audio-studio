@@ -258,14 +258,15 @@ function AudioPage() {
           outName,
         ];
       } else if (mode === "normalize") {
-        const af = "loudnorm=I=-16:TP=-1.5:LRA=11";
+        const af = "highpass=f=20,loudnorm=I=-14:TP=-1.5:LRA=9:linear=true";
         args = isAudio
-          ? ["-i", inputName, "-af", af, "-c:a", "libmp3lame", "-q:a", "2", outName]
+          ? ["-i", inputName, "-af", af, "-c:a", "libmp3lame", "-q:a", "0", outName]
           : ["-i", inputName, "-af", af, "-c:v", "copy", outName];
       } else if (mode === "denoise") {
-        const af = `afftdn=nf=-${denoiseStrength}`;
+        const noiseFloor = Math.min(denoiseStrength + 5, 40);
+        const af = `highpass=f=80,afftdn=nf=-${noiseFloor}:nt=w:om=o,acompressor=threshold=-18dB:ratio=2:attack=200:release=1000`;
         args = isAudio
-          ? ["-i", inputName, "-af", af, "-c:a", "libmp3lame", "-q:a", "2", outName]
+          ? ["-i", inputName, "-af", af, "-c:a", "libmp3lame", "-q:a", "0", outName]
           : ["-i", inputName, "-af", af, "-c:v", "copy", outName];
       } else if (mode === "silence-remove") {
         const af = `silenceremove=start_periods=1:start_silence=${silenceDuration}:start_threshold=${silenceThreshold}dB:stop_periods=-1:stop_silence=${silenceDuration}:stop_threshold=${silenceThreshold}dB`;
@@ -295,33 +296,36 @@ function AudioPage() {
           ? ["-i", inputName, "-af", af, "-c:a", "libmp3lame", "-q:a", "2", outName]
           : ["-i", inputName, "-af", af, "-c:v", "copy", outName];
       } else if (mode === "bass") {
-        const af = `equalizer=f=100:t=o:w=200:g=${bassGain}`;
+        const af = `equalizer=f=60:t=o:w=100:g=${Math.round(bassGain * 0.5)},equalizer=f=120:t=o:w=180:g=${bassGain},equalizer=f=250:t=o:w=200:g=${Math.round(bassGain * 0.4)}`;
         args = isAudio
-          ? ["-i", inputName, "-af", af, "-c:a", "libmp3lame", "-q:a", "2", outName]
+          ? ["-i", inputName, "-af", af, "-c:a", "libmp3lame", "-q:a", "0", outName]
           : ["-i", inputName, "-af", af, "-c:v", "copy", outName];
       } else if (mode === "treble") {
-        const af = `equalizer=f=8000:t=o:w=4000:g=${trebleGain}`;
+        const af = `equalizer=f=5000:t=o:w=3000:g=${Math.round(trebleGain * 0.5)},equalizer=f=10000:t=o:w=5000:g=${trebleGain},equalizer=f=16000:t=o:w=4000:g=${Math.round(trebleGain * 0.6)}`;
         args = isAudio
-          ? ["-i", inputName, "-af", af, "-c:a", "libmp3lame", "-q:a", "2", outName]
+          ? ["-i", inputName, "-af", af, "-c:a", "libmp3lame", "-q:a", "0", outName]
           : ["-i", inputName, "-af", af, "-c:v", "copy", outName];
       } else if (mode === "eq3band") {
         const filters: string[] = [];
-        if (eqLow !== 0) filters.push(`equalizer=f=100:t=o:w=200:g=${eqLow}`);
-        if (eqMid !== 0) filters.push(`equalizer=f=1000:t=o:w=1000:g=${eqMid}`);
-        if (eqHigh !== 0) filters.push(`equalizer=f=8000:t=o:w=4000:g=${eqHigh}`);
+        if (eqLow !== 0) filters.push(`equalizer=f=80:t=o:w=160:g=${Math.round(eqLow * 0.6)},equalizer=f=160:t=o:w=200:g=${eqLow}`);
+        if (eqMid !== 0) filters.push(`equalizer=f=800:t=o:w=800:g=${Math.round(eqMid * 0.7)},equalizer=f=2000:t=o:w=1500:g=${eqMid}`);
+        if (eqHigh !== 0) filters.push(`equalizer=f=6000:t=o:w=3000:g=${Math.round(eqHigh * 0.6)},equalizer=f=12000:t=o:w=5000:g=${eqHigh}`);
         const af = filters.length > 0 ? filters.join(",") : "acopy";
         args = isAudio
-          ? ["-i", inputName, "-af", af, "-c:a", "libmp3lame", "-q:a", "2", outName]
+          ? ["-i", inputName, "-af", af, "-c:a", "libmp3lame", "-q:a", "0", outName]
           : ["-i", inputName, "-af", af, "-c:v", "copy", outName];
       } else if (mode === "echo") {
-        const af = `aecho=0.8:0.88:${Math.round(echoDelay * 1000)}:${echoDecay}`;
+        const d1 = Math.round(echoDelay * 1000);
+        const d2 = Math.round(echoDelay * 1600);
+        const d3 = Math.round(echoDelay * 2200);
+        const af = `aecho=0.75:0.65:${d1}|${d2}|${d3}:${echoDecay}|${(echoDecay * 0.65).toFixed(2)}|${(echoDecay * 0.4).toFixed(2)}`;
         args = isAudio
-          ? ["-i", inputName, "-af", af, "-c:a", "libmp3lame", "-q:a", "2", outName]
+          ? ["-i", inputName, "-af", af, "-c:a", "libmp3lame", "-q:a", "0", outName]
           : ["-i", inputName, "-af", af, "-c:v", "copy", outName];
       } else if (mode === "stereo-mono") {
-        const af = "pan=mono|c0=0.5*c0+0.5*c1";
+        const af = "pan=stereo|c0=0.5*c0+0.5*c1|c1=0.5*c0+0.5*c1";
         args = isAudio
-          ? ["-i", inputName, "-af", af, "-c:a", "libmp3lame", "-q:a", "2", outName]
+          ? ["-i", inputName, "-af", af, "-c:a", "libmp3lame", "-q:a", "0", outName]
           : ["-i", inputName, "-af", af, "-c:v", "copy", outName];
       }
 

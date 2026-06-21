@@ -121,45 +121,45 @@ const COLOR_PRESETS = [
   {
     id: "vivid",
     label: "حيوي",
-    filter: "eq=contrast=1.2:saturation=1.5:brightness=0.05",
+    filter: "eq=contrast=1.25:saturation=1.55:brightness=0.04:gamma=0.95,unsharp=5:5:0.6:3:3:0.3",
   },
   {
     id: "cinema",
     label: "سينمائي",
     filter:
-      "eq=contrast=1.15:saturation=0.85:gamma=1.1,curves=r='0/0 0.5/0.45 1/0.9':g='0/0 0.5/0.5 1/1':b='0/0.05 0.5/0.5 1/1'",
+      "eq=contrast=1.12:saturation=0.88:gamma=1.08,curves=r='0/0.02 0.5/0.47 1/0.91':g='0/0 0.5/0.49 1/0.97':b='0/0.05 0.5/0.52 1/1',vignette=PI/5",
   },
   {
     id: "warm",
     label: "دافئ",
-    filter: "eq=contrast=1.05:saturation=1.3,colortemperature=warmth=0.3",
+    filter: "eq=contrast=1.08:saturation=1.35:brightness=0.02,curves=r='0/0.04 0.5/0.56 1/0.98':g='0/0 0.5/0.51 1/0.97':b='0/0 0.5/0.44 1/0.88'",
   },
   {
     id: "cool",
     label: "بارد",
-    filter: "eq=contrast=1.05:saturation=1.1,hue=h=10:s=0.9",
+    filter: "eq=contrast=1.06:saturation=1.12:brightness=0.01,curves=r='0/0 0.5/0.44 1/0.88':g='0/0 0.5/0.5 1/0.97':b='0/0.04 0.5/0.56 1/1'",
   },
   {
     id: "vintage",
     label: "كلاسيكي",
     filter:
-      "eq=contrast=0.9:saturation=0.7:brightness=0.05,curves=r='0/0.05 1/0.9':g='0/0.02 1/0.88':b='0/0.06 1/0.82'",
+      "eq=contrast=0.92:saturation=0.65:brightness=0.05,curves=r='0/0.06 0.5/0.54 1/0.9':g='0/0.02 0.5/0.5 1/0.87':b='0/0.08 0.5/0.52 1/0.82',vignette=PI/3.2",
   },
-  { id: "bw", label: "أبيض وأسود", filter: "hue=s=0,eq=contrast=1.1" },
+  { id: "bw", label: "أبيض وأسود", filter: "hue=s=0,eq=contrast=1.18:brightness=0.02,curves=all='0/0 0.2/0.14 0.5/0.5 0.82/0.88 1/1'" },
   {
     id: "dramatic",
     label: "درامي",
-    filter: "eq=contrast=1.4:saturation=0.8:gamma=0.9,vignette=PI/4",
+    filter: "eq=contrast=1.38:saturation=0.72:gamma=0.87,curves=all='0/0 0.28/0.2 0.72/0.8 1/1',vignette=PI/3.2",
   },
   {
     id: "soft",
     label: "ناعم",
-    filter: "eq=contrast=0.95:saturation=1.1:brightness=0.03,unsharp=3:3:0.5",
+    filter: "eq=contrast=0.9:saturation=1.18:brightness=0.05,curves=all='0/0.03 0.5/0.52 1/0.97',unsharp=7:7:0.4:5:5:0.2",
   },
   {
     id: "neon",
     label: "نيون",
-    filter: "eq=contrast=1.3:saturation=2:brightness=-0.05",
+    filter: "eq=contrast=1.28:saturation=2.2:brightness=-0.03:gamma=0.92,curves=r='0/0.02 0.5/0.62 1/1':b='0/0.08 0.5/0.6 1/1'",
   },
 ];
 
@@ -484,9 +484,9 @@ function EnhancePage() {
         ];
       } else if (mode === "denoise") {
         const map = {
-          light: "hqdn3d=2:1:3:2.5",
-          medium: "hqdn3d=4:3:6:4.5",
-          strong: "hqdn3d=6:5:10:7",
+          light:  "hqdn3d=2.5:1.5:3.5:3,unsharp=3:3:0.3:2:2:0.1",
+          medium: "hqdn3d=4.5:3.5:7:5.5,unsharp=3:3:0.2",
+          strong: "hqdn3d=7:6:12:9,unsharp=3:3:0.15",
         };
         args = [
           "-i",
@@ -596,8 +596,8 @@ function EnhancePage() {
           "-i",
           inputName,
           "-vf",
-          `scale=${w}:${h}:flags=bilinear`,
-          ...fastEncodeArgs({ hasAudio, outName }),
+          `scale=${w}:${h}:flags=lanczos+accurate_rnd+full_chroma_inp,unsharp=5:5:0.7:3:3:0.3,eq=brightness=0.02:contrast=1.06:saturation=1.1`,
+          ...fastEncodeArgs({ hasAudio, outName, crf: 18 }),
         ];
       } else if (mode === "fps") {
         args = [
@@ -613,7 +613,7 @@ function EnhancePage() {
           "-i",
           inputName,
           "-vf",
-          `fps=${gifFps},scale=${gifWidth}:-1:flags=bilinear,split[s0][s1];[s0]palettegen=stats_mode=diff[p];[s1][p]paletteuse=dither=bayer`,
+          `fps=${gifFps},scale=${gifWidth}:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=256:stats_mode=diff[p];[s1][p]paletteuse=dither=floyd_steinberg:diff_mode=rectangle`,
           outName,
         ];
       } else if (mode === "thumbnail") {
@@ -625,18 +625,18 @@ function EnhancePage() {
           "-i",
           inputName,
           "-vf",
-          "vidstabdetect=stepsize=6:shakiness=8:accuracy=5:result=stabilize_vectors.trf",
+          "vidstabdetect=stepsize=4:shakiness=9:accuracy=15:result=stabilize_vectors.trf",
           "-f",
           "null",
           "-",
         ]);
-        appendLog("✓ مرحلة التحليل اكتملت، جاري التثبيت...");
+        appendLog("✓ مرحلة التحليل اكتملت، جاري التثبيت بدقة عالية...");
         args = [
           "-i",
           inputName,
           "-vf",
-          `vidstabtransform=input=${detOut}:zoom=1:smoothing=20,unsharp=3:3:0.5`,
-          ...fastEncodeArgs({ hasAudio, outName }),
+          `vidstabtransform=input=${detOut}:zoom=2:smoothing=30:crop=black:optzoom=1,unsharp=5:5:0.5:3:3:0.3`,
+          ...fastEncodeArgs({ hasAudio, outName, crf: 19 }),
         ];
       } else if (mode === "auto-enhance") {
         const vf: string[] = [];
@@ -644,19 +644,21 @@ function EnhancePage() {
           meta && meta.height > 0 && meta.height < (autoLevel === "strong" ? 1080 : 720);
 
         if (autoLevel === "light") {
-          vf.push("hqdn3d=2:1:3:2.5");
-          vf.push("eq=brightness=0.02:contrast=1.05:saturation=1.15:gamma=0.97");
-          vf.push("unsharp=3:3:0.3");
+          vf.push("hqdn3d=2.5:1.5:3.5:3");
+          vf.push("eq=brightness=0.025:contrast=1.07:saturation=1.18:gamma=0.97");
+          vf.push("unsharp=5:5:0.45:3:3:0.2");
         } else if (autoLevel === "balanced") {
-          vf.push("hqdn3d=3:2:4:3.5");
-          vf.push("eq=brightness=0.03:contrast=1.1:saturation=1.25:gamma=0.95");
-          vf.push("unsharp=5:5:0.5");
-          if (needsUpscale) vf.push("scale=1280:720:flags=bilinear");
+          vf.push("hqdn3d=3.5:2.5:5:4");
+          vf.push("eq=brightness=0.04:contrast=1.12:saturation=1.32:gamma=0.93");
+          vf.push("curves=all='0/0 0.28/0.24 0.72/0.76 1/1'");
+          vf.push("unsharp=5:5:0.85:3:3:0.4");
+          if (needsUpscale) vf.push("scale=1280:720:flags=lanczos+accurate_rnd");
         } else {
-          vf.push("hqdn3d=4:3:6:4.5");
-          vf.push("eq=brightness=0.05:contrast=1.15:saturation=1.4:gamma=0.92");
-          vf.push("unsharp=5:5:0.8");
-          if (needsUpscale) vf.push("scale=1920:1080:flags=bilinear");
+          vf.push("hqdn3d=5:4:8:6");
+          vf.push("eq=brightness=0.05:contrast=1.16:saturation=1.42:gamma=0.91");
+          vf.push("curves=all='0/0 0.3/0.26 0.7/0.75 1/1'");
+          vf.push("unsharp=7:7:1.0:5:5:0.5");
+          if (needsUpscale) vf.push("scale=1920:1080:flags=lanczos+accurate_rnd");
         }
 
         const audioArgs: string[] = hasAudio
