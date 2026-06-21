@@ -70,7 +70,7 @@ const HELP = `╔═════════════════════
 
 التلميح: اضغط ↑ للتنقل في السجل، اضغط على أي سكربت للإلصاق.`;
 
-// ── Cloud execution helper ────────────────────────────────────────────────────
+// ── Cloud execution helper — async polling ────────────────────────────────────
 async function runCloudCommand(
   args: string[],
   file: File | null,
@@ -86,20 +86,57 @@ async function runCloudCommand(
   fd.append("file", file, inputName);
   fd.append("args", JSON.stringify(args));
   fd.append("outputName", outputName);
+  fd.append("inputName", inputName);
 
-  push({ kind: "cloud", text: `☁ جاري الإرسال للسيرفر: ffmpeg ${args.slice(0, 5).join(" ")} ...` });
-  const res = await fetch("/api/cloud-exec", { method: "POST", body: fd });
-  if (!res.ok) {
-    const txt = await res.text().catch(() => res.statusText);
-    throw new Error(`فشل السيرفر: ${txt.slice(0, 200)}`);
+  push({ kind: "cloud", text: `☁ جاري الإرسال للسيرفر (${(file.size / 1024 / 1024).toFixed(1)} MB)...` });
+
+  // Start async job — returns immediately with jobId
+  const startRes = await fetch("/api/terminal-exec-async", { method: "POST", body: fd });
+  if (!startRes.ok) {
+    const txt = await startRes.text().catch(() => startRes.statusText);
+    throw new Error(`فشل بدء العملية: ${txt.slice(0, 300)}`);
   }
-  const blob = await res.blob();
+  const { jobId } = await startRes.json() as { jobId: string; outputName: string };
+  push({ kind: "cloud", text: `☁ بدأ التنفيذ على السيرفر... (${jobId.slice(0, 8)})` });
+
+  // Poll until done
+  let lastPct = -1;
+  let pollErrors = 0;
+  while (true) {
+    await new Promise(r => setTimeout(r, 2000));
+    let job: { status: string; progress?: number; error?: string };
+    try {
+      const pollRes = await fetch(`/api/job/${jobId}`);
+      if (!pollRes.ok) { pollErrors++; if (pollErrors > 5) throw new Error("فقدان الاتصال بالسيرفر"); continue; }
+      job = await pollRes.json();
+      pollErrors = 0;
+    } catch (e) {
+      pollErrors++;
+      if (pollErrors > 5) throw e;
+      continue;
+    }
+
+    if (job.status === "processing") {
+      const pct = job.progress ?? 0;
+      if (pct !== lastPct && pct > 0) {
+        push({ kind: "cloud", text: `☁ معالجة: ${pct}%` });
+        lastPct = pct;
+      }
+    } else if (job.status === "done") {
+      break;
+    } else if (job.status === "failed" || job.status === "cancelled") {
+      throw new Error(`فشل التنفيذ: ${job.error || job.status}`);
+    }
+  }
+
+  // Fetch result and trigger download
+  push({ kind: "cloud", text: `☁ اكتملت المعالجة — جاري تنزيل النتيجة...` });
+  const dlRes = await fetch(`/api/job-result/${jobId}?dl=1`);
+  if (!dlRes.ok) throw new Error("فشل جلب الملف الناتج من السيرفر");
+  const blob = await dlRes.blob();
   const url = URL.createObjectURL(blob);
-  const ext = outputName.split(".").pop()?.toLowerCase() || "mp4";
   const a = document.createElement("a");
-  a.href = url;
-  a.download = outputName;
-  a.click();
+  a.href = url; a.download = outputName; a.click();
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
   push({ kind: "success", text: `✓ اكتمل! الناتج: ${outputName} (${(blob.size / 1024 / 1024).toFixed(2)} MB) — بدأ التنزيل` });
   return outputName;

@@ -446,6 +446,106 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // ── POST /api/terminal-exec-async ────────────────────────────────────
+    if (urlPath === "/api/terminal-exec-async" && req.method === "POST") {
+      try {
+        const bb = Busboy({ headers: req.headers });
+        const parts = [];
+        let argsJson = "[]"; let outputName = "output.mp4";
+        let inputName = "input.mp4"; let inputFileName = "input.mp4";
+        bb.on("file", (_, file, info) => {
+          if (info?.filename) inputFileName = info.filename;
+          file.on("data", d => parts.push(d));
+        });
+        bb.on("field", (name, value) => {
+          if (name === "args") argsJson = value;
+          if (name === "outputName") outputName = value;
+          if (name === "inputName") inputName = value;
+        });
+        await new Promise((resolve, reject) => { bb.on("finish", resolve); bb.on("error", reject); req.pipe(bb); });
+        const fileBuffer = Buffer.concat(parts);
+        if (!fileBuffer.length) { res.writeHead(400, { "Content-Type": "application/json", ...SECURITY_HEADERS }); res.end(JSON.stringify({ error: "No file" })); return; }
+
+        const ts = Date.now();
+        const ext1 = (inputFileName.split(".").pop() || "mp4").toLowerCase();
+        const outExt = (outputName.split(".").pop() || "mp4").toLowerCase();
+        const tmpIn = path.join(os.tmpdir(), `term-in-${ts}.${ext1}`);
+        const tmpOut = path.join(os.tmpdir(), `term-out-${ts}.${outExt}`);
+        await writeFile(tmpIn, fileBuffer);
+
+        const jobId = crypto.randomUUID();
+        _jobs.set(jobId, { status: "processing", ext: outExt, createdAt: Date.now(), progress: 0 });
+
+        res.writeHead(200, { "Content-Type": "application/json", ...SECURITY_HEADERS });
+        res.end(JSON.stringify({ jobId, outputName }));
+
+        (async () => {
+          let totalDurationSec = 0;
+          try {
+            const probeOut = execFileSync(FFMPEG_BIN, ["-v", "quiet", "-print_format", "json", "-show_format", tmpIn], { timeout: 10_000 }).toString();
+            totalDurationSec = parseFloat(JSON.parse(probeOut).format?.duration ?? "0");
+          } catch { /* ignore */ }
+
+          let args = JSON.parse(argsJson);
+          args = args.map(a => a === inputName ? tmpIn : a === outputName ? tmpOut : a);
+          if (!args.includes(tmpOut)) args = [...args.slice(0, -1), tmpOut];
+
+          const progressFile = `${tmpOut}.progress`;
+          const argsWithProgress = args.length >= 2
+            ? [...args.slice(0, -1), "-progress", progressFile, args[args.length - 1]]
+            : args;
+
+          const progressInterval = setInterval(async () => {
+            try {
+              const content = fs.readFileSync(progressFile).toString("utf8");
+              const m = content.match(/out_time=(\d+):(\d+):(\d+\.\d+)/);
+              if (m && totalDurationSec > 0) {
+                const curSec = parseInt(m[1]) * 3600 + parseInt(m[2]) * 60 + parseFloat(m[3]);
+                const pct = Math.min(95, Math.round((curSec / totalDurationSec) * 100));
+                const j = _jobs.get(jobId);
+                if (j) j.progress = pct;
+              }
+            } catch { /* ignore */ }
+          }, 1000);
+
+          const { spawn } = await import("child_process");
+          const child = spawn(FFMPEG_BIN, ["-y", ...argsWithProgress.filter(a => a !== "-y")], { stdio: ["ignore", "ignore", "ignore"] });
+          const jProc = _jobs.get(jobId);
+          if (jProc) jProc.ffmpegProcess = child;
+
+          try {
+            await new Promise((resolve, reject) => {
+              child.on("close", code => {
+                const j = _jobs.get(jobId);
+                if (j?.status === "cancelled") { resolve(); return; }
+                if (code === 0) resolve();
+                else reject(new Error(`FFmpeg exited with code ${code}`));
+              });
+              child.on("error", err => {
+                const j = _jobs.get(jobId);
+                if (j?.status === "cancelled") { resolve(); return; }
+                reject(err);
+              });
+            });
+          } finally {
+            clearInterval(progressInterval);
+            unlink(progressFile).catch(() => {});
+          }
+
+          const job = _jobs.get(jobId);
+          if (job && job.status !== "cancelled") {
+            job.status = "done"; job.outputPath = tmpOut; job.progress = 100;
+          }
+          unlink(tmpIn).catch(() => {});
+        })().catch(err => {
+          const job = _jobs.get(jobId);
+          if (job) { job.status = "failed"; job.error = String(err); }
+        });
+
+      } catch (err) { res.writeHead(500, { "Content-Type": "application/json", ...SECURITY_HEADERS }); res.end(JSON.stringify({ error: String(err) })); }
+      return;
+    }
+
     // ── POST /api/captions-exec ──────────────────────────────────────────
     if (urlPath === "/api/captions-exec" && req.method === "POST") {
       try {

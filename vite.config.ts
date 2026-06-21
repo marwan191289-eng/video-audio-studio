@@ -623,6 +623,127 @@ function cloudEnhanceDevPlugin(): Plugin {
           return;
         }
 
+        // ── POST /api/terminal-exec-async ────────────────────────────────────
+        if (pathname === "/api/terminal-exec-async" && method === "POST") {
+          try {
+            const [{ default: Busboy }, { tmpdir }, { join }] = await Promise.all([
+              import("busboy"), import("os"), import("path"),
+            ]);
+            const bb = Busboy({ headers: req.headers });
+            const parts: Buffer[] = [];
+            let argsJson = "[]"; let outputName = "output.mp4";
+            let inputName = "input.mp4"; let inputFileName = "input.mp4";
+            bb.on("file", (_: string, file: any, info: any) => {
+              if (info?.filename) inputFileName = info.filename;
+              file.on("data", (d: Buffer) => parts.push(d));
+            });
+            bb.on("field", (name: string, value: string) => {
+              if (name === "args") argsJson = value;
+              if (name === "outputName") outputName = value;
+              if (name === "inputName") inputName = value;
+            });
+            await new Promise<void>((resolve, reject) => { bb.on("finish", resolve); bb.on("error", reject); req.pipe(bb); });
+            const fileBuffer = Buffer.concat(parts);
+            if (!fileBuffer.length) { res.writeHead(400, { "Content-Type": "application/json" }); res.end(JSON.stringify({ error: "No file" })); return; }
+
+            const ts = Date.now();
+            const ext1 = (inputFileName.split(".").pop() || "mp4").toLowerCase();
+            const outExt = (outputName.split(".").pop() || "mp4").toLowerCase();
+            const tmpIn = join(tmpdir(), `term-in-${ts}.${ext1}`);
+            const tmpOut = join(tmpdir(), `term-out-${ts}.${outExt}`);
+
+            const { writeFile: wf } = await import("fs/promises");
+            await wf(tmpIn, fileBuffer);
+
+            const jobId = crypto.randomUUID();
+            _jobs.set(jobId, { status: "processing", ext: outExt, createdAt: Date.now(), progress: 0 });
+
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ jobId, outputName }));
+
+            (async () => {
+              const { spawn: _sp } = await import("child_process");
+              const { unlink: ul } = await import("fs/promises");
+              const { existsSync: ex } = await import("fs");
+              const { createRequire } = await import("module");
+
+              let ffmpegBin = "ffmpeg";
+              try { (await import("child_process")).execFileSync("ffmpeg", ["-version"], { stdio: "ignore" }); }
+              catch {
+                try {
+                  const r = createRequire(import.meta.url);
+                  const bin = r("ffmpeg-static") as string;
+                  if (bin && ex(bin)) ffmpegBin = bin;
+                } catch { /* ignore */ }
+              }
+
+              let args: string[] = JSON.parse(argsJson);
+              args = args.map(a => a === inputName ? tmpIn : a === outputName ? tmpOut : a);
+              if (!args.includes(tmpOut)) args = [...args.slice(0, -1), tmpOut];
+
+              let totalDurationSec = 0;
+              try {
+                const { execFileSync } = await import("child_process");
+                const probeOut = execFileSync(ffmpegBin, ["-v", "quiet", "-print_format", "json", "-show_format", tmpIn], { timeout: 10_000 }).toString();
+                totalDurationSec = parseFloat((JSON.parse(probeOut) as any).format?.duration ?? "0");
+              } catch { /* ignore */ }
+
+              const progressFile = `${tmpOut}.progress`;
+              const argsWithProgress = args.length >= 2
+                ? [...args.slice(0, -1), "-progress", progressFile, args[args.length - 1]]
+                : args;
+
+              const progressInterval = setInterval(async () => {
+                try {
+                  const { readFile: rf } = await import("fs/promises");
+                  const content = (await rf(progressFile)).toString("utf8");
+                  const m = content.match(/out_time=(\d+):(\d+):(\d+\.\d+)/);
+                  if (m && totalDurationSec > 0) {
+                    const curSec = parseInt(m[1]) * 3600 + parseInt(m[2]) * 60 + parseFloat(m[3]);
+                    const pct = Math.min(95, Math.round((curSec / totalDurationSec) * 100));
+                    const j = _jobs.get(jobId);
+                    if (j) j.progress = pct;
+                  }
+                } catch { /* ignore */ }
+              }, 1000);
+
+              const child = _sp(ffmpegBin, ["-y", ...argsWithProgress.filter(a => a !== "-y")], { stdio: ["ignore", "ignore", "ignore"] });
+              const jProc = _jobs.get(jobId);
+              if (jProc) jProc.ffmpegProcess = child;
+
+              try {
+                await new Promise<void>((resolve, reject) => {
+                  child.on("close", (code: number | null) => {
+                    const j = _jobs.get(jobId);
+                    if (j?.status === "cancelled") { resolve(); return; }
+                    if (code === 0) resolve();
+                    else reject(new Error(`FFmpeg exited with code ${code}`));
+                  });
+                  child.on("error", (err: Error) => {
+                    const j = _jobs.get(jobId);
+                    if (j?.status === "cancelled") { resolve(); return; }
+                    reject(err);
+                  });
+                });
+              } finally {
+                clearInterval(progressInterval);
+                ul(progressFile).catch(() => {});
+              }
+
+              const job = _jobs.get(jobId);
+              if (job && job.status !== "cancelled") {
+                job.status = "done"; job.outputPath = tmpOut; job.progress = 100;
+              }
+              ul(tmpIn).catch(() => {});
+            })().catch(err => {
+              const job = _jobs.get(jobId);
+              if (job) { job.status = "failed"; job.error = String(err); }
+            });
+
+          } catch (err) { res.writeHead(500, { "Content-Type": "application/json" }); res.end(JSON.stringify({ error: String(err) })); }
+          return;
+        }
+
         // ── POST /api/cloud-exec ──────────────────────────────────────────────
         if (pathname === "/api/cloud-exec" && method === "POST") {
           try {
