@@ -1,5 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useRef, useState, useEffect, useCallback } from "react";
+import { useLocalSettings } from "@/hooks/useLocalSettings";
 import { fetchFile } from "@ffmpeg/util";
 import { getFFmpeg, removeLogHandler, hasAudioByExt } from "@/lib/ffmpeg-client";
 import {
@@ -167,9 +168,9 @@ function WatermarkPage() {
   const [file, setFile] = useState<File | null>(null);
   const [videoMeta, setVideoMeta] = useState<{ w: number; h: number } | null>(null);
   const [regions, setRegions] = useState<Region[]>([]);
-  const [defaultMode, setDefaultMode] = useState<RegionMode>("delogo");
-  const [defaultBlur, setDefaultBlur] = useState(15);
-  const [defaultFill, setDefaultFill] = useState("#000000");
+  const [defaultMode, setDefaultMode] = useLocalSettings<RegionMode>("vep-wm-defaultMode", "delogo");
+  const [defaultBlur, setDefaultBlur] = useLocalSettings<number>("vep-wm-defaultBlur", 15);
+  const [defaultFill, setDefaultFill] = useLocalSettings<string>("vep-wm-defaultFill", "#000000");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showTip, setShowTip] = useState(true);
   const [processing, setProcessing] = useState(false);
@@ -179,7 +180,7 @@ function WatermarkPage() {
   const [outputName, setOutputName] = useState<string | null>(null);
   const [toast, setToast] = useState<{ msg: string; type: "ok" | "err" } | null>(null);
   const [dragOver, setDragOver] = useState(false);
-  const [processMode, setProcessMode] = useState<"local" | "cloud">("local");
+  const [processMode, setProcessMode] = useLocalSettings<"local" | "cloud">("vep-wm-processMode", "local");
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const hiddenVidRef = useRef<HTMLVideoElement>(null);

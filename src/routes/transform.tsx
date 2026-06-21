@@ -1,5 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useRef, useState, useEffect, useCallback } from "react";
+import { useLocalSettings } from "@/hooks/useLocalSettings";
 import { fetchFile } from "@ffmpeg/util";
 import { getFFmpeg, removeLogHandler, hasAudioByExt } from "@/lib/ffmpeg-client";
 import {
@@ -275,34 +276,34 @@ function TransformPage() {
 
   /* Voice */
   const [voiceEnabled, setVoiceEnabled] = useState(false);
-  const [voicePreset, setVoicePreset] = useState<string>("feminine");
+  const [voicePreset, setVoicePreset] = useLocalSettings<string>("vep-tr-voicePreset", "feminine");
   const [voiceOpen, setVoiceOpen] = useState(true);
 
   /* Background */
   const [bgEnabled, setBgEnabled] = useState(false);
-  const [bgColor, setBgColor] = useState("#00ff00");
-  const [bgSim, setBgSim] = useState(0.28);
-  const [bgBlend, setBgBlend] = useState(0.05);
-  const [bgMode, setBgMode] = useState<"solid" | "image">("solid");
-  const [bgSolid, setBgSolid] = useState("#1e293b");
+  const [bgColor, setBgColor] = useLocalSettings<string>("vep-tr-bgColor", "#00ff00");
+  const [bgSim, setBgSim] = useLocalSettings<number>("vep-tr-bgSim", 0.28);
+  const [bgBlend, setBgBlend] = useLocalSettings<number>("vep-tr-bgBlend", 0.05);
+  const [bgMode, setBgMode] = useLocalSettings<"solid" | "image">("vep-tr-bgMode", "solid");
+  const [bgSolid, setBgSolid] = useLocalSettings<string>("vep-tr-bgSolid", "#1e293b");
   const [bgImageFile, setBgImageFile] = useState<File | null>(null);
   const [bgOpen, setBgOpen] = useState(false);
 
   /* Face regions */
   const [faceRegions, setFaceRegions] = useState<FaceRegion[]>([]);
-  const [defaultFaceMode, setDefaultFaceMode] = useState<FaceMode>("blur");
-  const [defaultFaceStr, setDefaultFaceStr] = useState(18);
-  const [defaultFaceColor, setDefaultFaceColor] = useState("#000000");
+  const [defaultFaceMode, setDefaultFaceMode] = useLocalSettings<FaceMode>("vep-tr-faceMode", "blur");
+  const [defaultFaceStr, setDefaultFaceStr] = useLocalSettings<number>("vep-tr-faceStr", 18);
+  const [defaultFaceColor, setDefaultFaceColor] = useLocalSettings<string>("vep-tr-faceColor", "#000000");
   const [selectedFaceId, setSelectedFaceId] = useState<string | null>(null);
   const [faceOpen, setFaceOpen] = useState(false);
 
   /* Style */
   const [styleEnabled, setStyleEnabled] = useState(false);
-  const [stylePreset, setStylePreset] = useState<string>("cinematic");
+  const [stylePreset, setStylePreset] = useLocalSettings<string>("vep-tr-stylePreset", "cinematic");
   const [styleOpen, setStyleOpen] = useState(false);
 
   /* Processing */
-  const [processMode, setProcessMode] = useState<"local" | "cloud">("local");
+  const [processMode, setProcessMode] = useLocalSettings<"local" | "cloud">("vep-tr-processMode", "local");
   const [processing, setProcessing] = useState(false);
   const [progress, setProgress] = useState(0);
   const [ffLog, setFfLog] = useState("");

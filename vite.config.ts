@@ -623,6 +623,87 @@ function cloudEnhanceDevPlugin(): Plugin {
           return;
         }
 
+        // ── POST /api/football-detect ─────────────────────────────────────────
+        if (pathname === "/api/football-detect" && method === "POST") {
+          try {
+            const [{ default: Busboy }, { tmpdir }, { join }] = await Promise.all([
+              import("busboy"), import("os"), import("path"),
+            ]);
+            const bb = Busboy({ headers: req.headers });
+            const parts: Buffer[] = [];
+            let threshold = "12";
+            let inputFileName = "input.mp4";
+            bb.on("file", (_: string, file: any, info: any) => {
+              if (info?.filename) inputFileName = info.filename;
+              file.on("data", (d: Buffer) => parts.push(d));
+            });
+            bb.on("field", (name: string, value: string) => {
+              if (name === "threshold") threshold = value;
+            });
+            await new Promise<void>((resolve, reject) => { bb.on("finish", resolve); bb.on("error", reject); req.pipe(bb); });
+            const fileBuffer = Buffer.concat(parts);
+            if (!fileBuffer.length) { res.writeHead(400, { "Content-Type": "application/json" }); res.end(JSON.stringify({ error: "No file" })); return; }
+
+            const ts = Date.now();
+            const ext1 = (inputFileName.split(".").pop() || "mp4").toLowerCase();
+            const tmpIn = join(tmpdir(), `fb-detect-${ts}.${ext1}`);
+            const { writeFile: wf } = await import("fs/promises");
+            await wf(tmpIn, fileBuffer);
+
+            let ffmpegBin = "ffmpeg";
+            try { (await import("child_process")).execFileSync("ffmpeg", ["-version"], { stdio: "ignore" }); }
+            catch {
+              try {
+                const { createRequire } = await import("module");
+                const r = createRequire(import.meta.url);
+                const bin = r("ffmpeg-static") as string;
+                const { existsSync } = await import("fs");
+                if (bin && existsSync(bin)) ffmpegBin = bin;
+              } catch { /* ignore */ }
+            }
+
+            const thr = parseFloat(threshold) || 12;
+            const stderr_lines: string[] = [];
+            const { spawn } = await import("child_process");
+            await new Promise<void>((resolve, reject) => {
+              const proc = spawn(ffmpegBin, [
+                "-skip_frame", "noref",
+                "-i", tmpIn,
+                "-vf", `select='gt(scene,${(thr / 100).toFixed(3)})',showinfo`,
+                "-vsync", "vfr",
+                "-an", "-f", "null", "-",
+              ]);
+              proc.stderr.on("data", (d: Buffer) => stderr_lines.push(d.toString()));
+              proc.on("close", () => resolve());
+              proc.on("error", reject);
+            });
+
+            const log = stderr_lines.join("");
+            const rawTs: number[] = [];
+            for (const m of log.matchAll(/pts_time:(\d+\.?\d*)/g)) {
+              rawTs.push(parseFloat(m[1]));
+            }
+            rawTs.sort((a, b) => a - b);
+
+            // Cluster timestamps: skip if within 30s of previous
+            const clustered: number[] = [];
+            let last = -Infinity;
+            for (const t of rawTs) {
+              if (t - last > 30) { clustered.push(t); last = t; }
+            }
+
+            const { unlink } = await import("fs/promises");
+            unlink(tmpIn).catch(() => {});
+
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ timestamps: clustered }));
+          } catch (err) {
+            res.writeHead(500, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: String(err) }));
+          }
+          return;
+        }
+
         // ── POST /api/terminal-exec-async ────────────────────────────────────
         if (pathname === "/api/terminal-exec-async" && method === "POST") {
           try {

@@ -13,6 +13,7 @@ import { Route as WatermarkRouteImport } from './routes/watermark'
 import { Route as TransformRouteImport } from './routes/transform'
 import { Route as TerminalRouteImport } from './routes/terminal'
 import { Route as LibraryRouteImport } from './routes/library'
+import { Route as FootballRouteImport } from './routes/football'
 import { Route as FingerprintRouteImport } from './routes/fingerprint'
 import { Route as EnhanceRouteImport } from './routes/enhance'
 import { Route as CaptionsRouteImport } from './routes/captions'
@@ -39,6 +40,11 @@ const TerminalRoute = TerminalRouteImport.update({
 const LibraryRoute = LibraryRouteImport.update({
   id: '/library',
   path: '/library',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const FootballRoute = FootballRouteImport.update({
+  id: '/football',
+  path: '/football',
   getParentRoute: () => rootRouteImport,
 } as any)
 const FingerprintRoute = FingerprintRouteImport.update({
@@ -85,6 +91,7 @@ export interface FileRoutesByFullPath {
   '/captions': typeof CaptionsRoute
   '/enhance': typeof EnhanceRoute
   '/fingerprint': typeof FingerprintRoute
+  '/football': typeof FootballRoute
   '/library': typeof LibraryRoute
   '/terminal': typeof TerminalRoute
   '/transform': typeof TransformRoute
@@ -98,6 +105,7 @@ export interface FileRoutesByTo {
   '/captions': typeof CaptionsRoute
   '/enhance': typeof EnhanceRoute
   '/fingerprint': typeof FingerprintRoute
+  '/football': typeof FootballRoute
   '/library': typeof LibraryRoute
   '/terminal': typeof TerminalRoute
   '/transform': typeof TransformRoute
@@ -112,6 +120,7 @@ export interface FileRoutesById {
   '/captions': typeof CaptionsRoute
   '/enhance': typeof EnhanceRoute
   '/fingerprint': typeof FingerprintRoute
+  '/football': typeof FootballRoute
   '/library': typeof LibraryRoute
   '/terminal': typeof TerminalRoute
   '/transform': typeof TransformRoute
@@ -127,6 +136,7 @@ export interface FileRouteTypes {
     | '/captions'
     | '/enhance'
     | '/fingerprint'
+    | '/football'
     | '/library'
     | '/terminal'
     | '/transform'
@@ -140,6 +150,7 @@ export interface FileRouteTypes {
     | '/captions'
     | '/enhance'
     | '/fingerprint'
+    | '/football'
     | '/library'
     | '/terminal'
     | '/transform'
@@ -153,6 +164,7 @@ export interface FileRouteTypes {
     | '/captions'
     | '/enhance'
     | '/fingerprint'
+    | '/football'
     | '/library'
     | '/terminal'
     | '/transform'
@@ -167,6 +179,7 @@ export interface RootRouteChildren {
   CaptionsRoute: typeof CaptionsRoute
   EnhanceRoute: typeof EnhanceRoute
   FingerprintRoute: typeof FingerprintRoute
+  FootballRoute: typeof FootballRoute
   LibraryRoute: typeof LibraryRoute
   TerminalRoute: typeof TerminalRoute
   TransformRoute: typeof TransformRoute
@@ -201,6 +214,13 @@ declare module '@tanstack/react-router' {
       path: '/library'
       fullPath: '/library'
       preLoaderRoute: typeof LibraryRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/football': {
+      id: '/football'
+      path: '/football'
+      fullPath: '/football'
+      preLoaderRoute: typeof FootballRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/fingerprint': {
@@ -263,6 +283,7 @@ const rootRouteChildren: RootRouteChildren = {
   CaptionsRoute: CaptionsRoute,
   EnhanceRoute: EnhanceRoute,
   FingerprintRoute: FingerprintRoute,
+  FootballRoute: FootballRoute,
   LibraryRoute: LibraryRoute,
   TerminalRoute: TerminalRoute,
   TransformRoute: TransformRoute,

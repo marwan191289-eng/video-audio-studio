@@ -446,6 +446,58 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // ── POST /api/football-detect ─────────────────────────────────────────
+    if (urlPath === "/api/football-detect" && req.method === "POST") {
+      try {
+        const bb = Busboy({ headers: req.headers });
+        const parts = [];
+        let threshold = "12";
+        let inputFileName = "input.mp4";
+        bb.on("file", (_, file, info) => { if (info?.filename) inputFileName = info.filename; file.on("data", d => parts.push(d)); });
+        bb.on("field", (name, value) => { if (name === "threshold") threshold = value; });
+        await new Promise((resolve, reject) => { bb.on("finish", resolve); bb.on("error", reject); req.pipe(bb); });
+        const fileBuffer = Buffer.concat(parts);
+        if (!fileBuffer.length) { res.writeHead(400, { "Content-Type": "application/json", ...SECURITY_HEADERS }); res.end(JSON.stringify({ error: "No file" })); return; }
+
+        const ts = Date.now();
+        const ext1 = (inputFileName.split(".").pop() || "mp4").toLowerCase();
+        const tmpIn = path.join(os.tmpdir(), `fb-detect-${ts}.${ext1}`);
+        await writeFile(tmpIn, fileBuffer);
+
+        const thr = parseFloat(threshold) || 12;
+        const stderrLines = [];
+        await new Promise((resolve, reject) => {
+          const proc = spawn(FFMPEG_BIN, [
+            "-skip_frame", "noref",
+            "-i", tmpIn,
+            "-vf", `select='gt(scene,${(thr / 100).toFixed(3)})',showinfo`,
+            "-vsync", "vfr",
+            "-an", "-f", "null", "-",
+          ]);
+          proc.stderr.on("data", d => stderrLines.push(d.toString()));
+          proc.on("close", resolve);
+          proc.on("error", reject);
+        });
+
+        const log = stderrLines.join("");
+        const rawTs = [];
+        for (const m of log.matchAll(/pts_time:(\d+\.?\d*)/g)) rawTs.push(parseFloat(m[1]));
+        rawTs.sort((a, b) => a - b);
+
+        const clustered = [];
+        let last = -Infinity;
+        for (const t of rawTs) { if (t - last > 30) { clustered.push(t); last = t; } }
+
+        unlink(tmpIn).catch(() => {});
+        res.writeHead(200, { "Content-Type": "application/json", ...SECURITY_HEADERS });
+        res.end(JSON.stringify({ timestamps: clustered }));
+      } catch (err) {
+        res.writeHead(500, { "Content-Type": "application/json", ...SECURITY_HEADERS });
+        res.end(JSON.stringify({ error: String(err) }));
+      }
+      return;
+    }
+
     // ── POST /api/terminal-exec-async ────────────────────────────────────
     if (urlPath === "/api/terminal-exec-async" && req.method === "POST") {
       try {

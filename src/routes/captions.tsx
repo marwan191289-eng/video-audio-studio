@@ -1,5 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useRef, useState, useCallback } from "react";
+import { useRef, useState, useCallback, useEffect } from "react";
+import { useLocalSettings } from "@/hooks/useLocalSettings";
 import { fetchFile } from "@ffmpeg/util";
 import { getFFmpeg, removeLogHandler, fastEncodeArgs } from "@/lib/ffmpeg-client";
 import {
@@ -323,12 +324,12 @@ const DEFAULT_STYLE: BurnStyle = {
 
 function CaptionsPage() {
   const [tab, setTab] = useState<CaptionTab>("burn");
-  const [processMode, setProcessMode] = useState<"local" | "cloud">("cloud");
+  const [processMode, setProcessMode] = useLocalSettings<"local" | "cloud">("vep-captions-mode", "cloud");
 
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [subtitleFile, setSubtitleFile] = useState<File | null>(null);
 
-  const [burnStyle, setBurnStyle] = useState<BurnStyle>(DEFAULT_STYLE);
+  const [burnStyle, setBurnStyle] = useLocalSettings<BurnStyle>("vep-captions-style", DEFAULT_STYLE);
   const [softFormat, setSoftFormat] = useState<"mp4" | "mkv">("mp4");
   const [softLang, setSoftLang] = useState("ara");
   const [extractTrack, setExtractTrack] = useState(0);

@@ -21,6 +21,7 @@ import {
   Blend,
   ScanSearch,
   Languages,
+  Trophy,
 } from "lucide-react";
 
 export const Route = createFileRoute("/")({
@@ -108,6 +109,14 @@ const features = [
     href: "/captions",
     gradient: "from-amber-500 to-orange-600",
     badge: "6 أدوات",
+  },
+  {
+    icon: Trophy,
+    title: "ملخصات كرة القدم",
+    desc: "استخراج الأهداف والهجمات الخطيرة تلقائياً أو عبر طوابع زمنية — تجميع، تحسين، إزالة العلامات، وتغيير البصمة.",
+    href: "/football",
+    gradient: "from-emerald-500 to-teal-600",
+    badge: "جديد 🏆",
   },
   {
     icon: Library,
