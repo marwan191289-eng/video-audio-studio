@@ -20,6 +20,8 @@ import {
   Trash2,
   Plus,
   Info,
+  Cloud,
+  Cpu,
 } from "lucide-react";
 
 export const Route = createFileRoute("/transform")({
@@ -300,6 +302,7 @@ function TransformPage() {
   const [styleOpen, setStyleOpen] = useState(false);
 
   /* Processing */
+  const [processMode, setProcessMode] = useState<"local" | "cloud">("local");
   const [processing, setProcessing] = useState(false);
   const [progress, setProgress] = useState(0);
   const [ffLog, setFfLog] = useState("");
@@ -526,13 +529,31 @@ function TransformPage() {
         await ffmpeg.writeFile("tr_bg.jpg", await fetchFile(bgImageFile));
       }
 
-      await ffmpeg.exec(["-i", inName, ...preArgs, ...postArgs]);
-
-      const data = (await ffmpeg.readFile(outName)) as Uint8Array;
-      const blob = new Blob([data.buffer as ArrayBuffer], { type: "video/mp4" });
-      setOutputUrl(URL.createObjectURL(blob));
-      setOutputName(`${file.name.replace(/\.[^.]+$/, "")}_transformed.mp4`);
-      toast_("اكتملت التحويلات بنجاح!", "ok");
+      if (processMode === "cloud" && !needsBgImage) {
+        setProgress(20);
+        const cloudArgs = ["-i", inName, ...preArgs, ...postArgs];
+        const fd = new FormData();
+        fd.append("file", file, inName);
+        fd.append("args", JSON.stringify(cloudArgs));
+        fd.append("outputName", outName);
+        const cloudRes = await fetch("/api/cloud-exec", { method: "POST", body: fd });
+        if (!cloudRes.ok) throw new Error("خطأ سحابي: " + (await cloudRes.text()).slice(0, 200));
+        const resBlob = await cloudRes.blob();
+        setProgress(100);
+        setOutputUrl(URL.createObjectURL(new Blob([await resBlob.arrayBuffer()], { type: "video/mp4" })));
+        setOutputName(`${file.name.replace(/\.[^.]+$/, "")}_transformed.mp4`);
+        toast_("اكتملت التحويلات السحابية! ☁", "ok");
+      } else {
+        if (processMode === "cloud" && needsBgImage) {
+          toast_("⚠ الخلفية المخصصة تتطلب الوضع المحلي — تم التبديل تلقائياً", "ok");
+        }
+        await ffmpeg.exec(["-i", inName, ...preArgs, ...postArgs]);
+        const data = (await ffmpeg.readFile(outName)) as Uint8Array;
+        const blob = new Blob([data.buffer as ArrayBuffer], { type: "video/mp4" });
+        setOutputUrl(URL.createObjectURL(blob));
+        setOutputName(`${file.name.replace(/\.[^.]+$/, "")}_transformed.mp4`);
+        toast_("اكتملت التحويلات بنجاح!", "ok");
+      }
 
       await Promise.all([
         ffmpeg.deleteFile(inName).catch(() => {}),
@@ -615,6 +636,26 @@ function TransformPage() {
           المحرر
         </Link>
       </header>
+
+      {/* Processing mode bar */}
+      <div className="border-b border-border bg-card/30">
+        <div className="max-w-7xl mx-auto px-5 py-2.5 flex items-center gap-3">
+          <span className="text-xs text-muted-foreground font-medium">وضع المعالجة:</span>
+          <div className="flex rounded-xl border border-border overflow-hidden bg-background">
+            <button onClick={() => setProcessMode("local")}
+              className={`flex items-center gap-1.5 px-4 py-1.5 text-xs font-semibold transition ${processMode === "local" ? "bg-fuchsia-500/15 text-fuchsia-400" : "text-muted-foreground hover:text-foreground"}`}>
+              <Cpu className="size-3" /> محلي (WASM)
+            </button>
+            <button onClick={() => setProcessMode("cloud")}
+              className={`flex items-center gap-1.5 px-4 py-1.5 text-xs font-semibold transition ${processMode === "cloud" ? "bg-sky-500/15 text-sky-400" : "text-muted-foreground hover:text-foreground"}`}>
+              <Cloud className="size-3" /> سحابي ☁
+            </button>
+          </div>
+          <span className="text-[10px] text-muted-foreground">
+            {processMode === "cloud" ? "معالجة على السيرفر — أسرع للملفات الكبيرة (الخلفية المخصصة تتطلب المحلي)" : "معالجة في المتصفح — خصوصية تامة"}
+          </span>
+        </div>
+      </div>
 
       <main className="mx-auto max-w-7xl px-4 py-6">
         <div className="grid gap-5 lg:grid-cols-[1fr_360px]">

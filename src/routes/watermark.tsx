@@ -17,6 +17,8 @@ import {
   Eraser,
   X,
   Info,
+  Cloud,
+  Cpu,
 } from "lucide-react";
 
 export const Route = createFileRoute("/watermark")({
@@ -177,6 +179,7 @@ function WatermarkPage() {
   const [outputName, setOutputName] = useState<string | null>(null);
   const [toast, setToast] = useState<{ msg: string; type: "ok" | "err" } | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  const [processMode, setProcessMode] = useState<"local" | "cloud">("local");
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const hiddenVidRef = useRef<HTMLVideoElement>(null);
@@ -359,13 +362,28 @@ function WatermarkPage() {
       const audio = hasAudioByExt(inName);
 
       const { args, outName } = buildFiltergraph(regions, audio);
-      await ffmpeg.exec(["-i", inName, ...args]);
-
-      const data = (await ffmpeg.readFile(outName)) as Uint8Array;
-      const blob = new Blob([data.buffer as ArrayBuffer], { type: "video/mp4" });
-      setOutputUrl(URL.createObjectURL(blob));
-      setOutputName(`${file.name.replace(/\.[^.]+$/, "")}_clean.mp4`);
-      toast_("اكتملت المعالجة!", "ok");
+      if (processMode === "cloud") {
+        setProgress(20);
+        const cloudArgs = ["-i", inName, ...args];
+        const fd = new FormData();
+        fd.append("file", file, inName);
+        fd.append("args", JSON.stringify(cloudArgs));
+        fd.append("outputName", outName);
+        const cloudRes = await fetch("/api/cloud-exec", { method: "POST", body: fd });
+        if (!cloudRes.ok) throw new Error("خطأ سحابي: " + (await cloudRes.text()).slice(0, 200));
+        const resBlob = await cloudRes.blob();
+        setProgress(100);
+        setOutputUrl(URL.createObjectURL(new Blob([await resBlob.arrayBuffer()], { type: "video/mp4" })));
+        setOutputName(`${file.name.replace(/\.[^.]+$/, "")}_clean.mp4`);
+        toast_("اكتملت إزالة العلامات المائية! ☁", "ok");
+      } else {
+        await ffmpeg.exec(["-i", inName, ...args]);
+        const data = (await ffmpeg.readFile(outName)) as Uint8Array;
+        const blob = new Blob([data.buffer as ArrayBuffer], { type: "video/mp4" });
+        setOutputUrl(URL.createObjectURL(blob));
+        setOutputName(`${file.name.replace(/\.[^.]+$/, "")}_clean.mp4`);
+        toast_("اكتملت المعالجة!", "ok");
+      }
 
       await ffmpeg.deleteFile(inName).catch(() => {});
       await ffmpeg.deleteFile(outName).catch(() => {});
@@ -413,6 +431,26 @@ function WatermarkPage() {
           المحرر
         </Link>
       </header>
+
+      {/* Processing mode bar */}
+      <div className="border-b border-border bg-card/30">
+        <div className="max-w-7xl mx-auto px-5 py-2.5 flex items-center gap-3">
+          <span className="text-xs text-muted-foreground font-medium">وضع المعالجة:</span>
+          <div className="flex rounded-xl border border-border overflow-hidden bg-background">
+            <button onClick={() => setProcessMode("local")}
+              className={`flex items-center gap-1.5 px-4 py-1.5 text-xs font-semibold transition ${processMode === "local" ? "bg-rose-500/15 text-rose-400" : "text-muted-foreground hover:text-foreground"}`}>
+              <Cpu className="size-3" /> محلي (WASM)
+            </button>
+            <button onClick={() => setProcessMode("cloud")}
+              className={`flex items-center gap-1.5 px-4 py-1.5 text-xs font-semibold transition ${processMode === "cloud" ? "bg-sky-500/15 text-sky-400" : "text-muted-foreground hover:text-foreground"}`}>
+              <Cloud className="size-3" /> سحابي ☁
+            </button>
+          </div>
+          <span className="text-[10px] text-muted-foreground">
+            {processMode === "cloud" ? "يُعالج على السيرفر — مناسب للملفات الكبيرة" : "معالجة في المتصفح — خصوصية تامة"}
+          </span>
+        </div>
+      </div>
 
       <main className="mx-auto max-w-7xl px-4 py-6">
         <div className="grid gap-5 lg:grid-cols-[1fr_340px]">

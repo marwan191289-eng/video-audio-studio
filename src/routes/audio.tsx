@@ -19,6 +19,8 @@ import {
   Settings2,
   RefreshCw,
   X,
+  Cloud,
+  Cpu,
 } from "lucide-react";
 
 export const Route = createFileRoute("/audio")({
@@ -161,6 +163,7 @@ function AudioPage() {
   const [log, setLog] = useState("");
   const [showLog, setShowLog] = useState(false);
   const [toast, setToast] = useState<{ msg: string; type: "ok" | "err" } | null>(null);
+  const [processMode, setProcessMode] = useState<"local" | "cloud">("local");
 
   const [volumeDb, setVolumeDb] = useState(3);
   const [fadeInDur, setFadeInDur] = useState(2);
@@ -322,14 +325,30 @@ function AudioPage() {
           : ["-i", inputName, "-af", af, "-c:v", "copy", outName];
       }
 
-      await ffmpeg.exec(args);
-      setProgress(100);
-      const data = (await ffmpeg.readFile(outName)) as Uint8Array;
-      const mime = outName.endsWith(".mp3") ? "audio/mpeg" : "video/mp4";
-      const blob = new Blob([data.buffer as ArrayBuffer], { type: mime });
-      setOutputName(outName);
-      setOutputUrl(URL.createObjectURL(blob));
-      showToast("✓ اكتملت المعالجة!", "ok");
+      if (processMode === "cloud") {
+        setProgress(20);
+        const fd = new FormData();
+        fd.append("file", file, inputName);
+        fd.append("args", JSON.stringify(args));
+        fd.append("outputName", outName);
+        const cloudRes = await fetch("/api/cloud-exec", { method: "POST", body: fd });
+        if (!cloudRes.ok) throw new Error("خطأ سحابي: " + (await cloudRes.text()).slice(0, 200));
+        const resBlob = await cloudRes.blob();
+        setProgress(100);
+        const mime2 = outName.endsWith(".mp3") ? "audio/mpeg" : "video/mp4";
+        setOutputName(outName);
+        setOutputUrl(URL.createObjectURL(new Blob([await resBlob.arrayBuffer()], { type: mime2 })));
+        showToast("✓ اكتملت المعالجة السحابية! ☁", "ok");
+      } else {
+        await ffmpeg.exec(args);
+        setProgress(100);
+        const data = (await ffmpeg.readFile(outName)) as Uint8Array;
+        const mime = outName.endsWith(".mp3") ? "audio/mpeg" : "video/mp4";
+        const blob = new Blob([data.buffer as ArrayBuffer], { type: mime });
+        setOutputName(outName);
+        setOutputUrl(URL.createObjectURL(blob));
+        showToast("✓ اكتملت المعالجة!", "ok");
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e) || "حدث خطأ";
       appendLog("❌ خطأ: " + msg);
@@ -377,6 +396,30 @@ function AudioPage() {
           المحرر
         </Link>
       </header>
+
+      {/* Processing mode bar */}
+      <div className="border-b border-border bg-card/30">
+        <div className="max-w-7xl mx-auto px-5 py-2.5 flex items-center gap-3">
+          <span className="text-xs text-muted-foreground font-medium">وضع المعالجة:</span>
+          <div className="flex rounded-xl border border-border overflow-hidden bg-background">
+            <button
+              onClick={() => setProcessMode("local")}
+              className={`flex items-center gap-1.5 px-4 py-1.5 text-xs font-semibold transition ${processMode === "local" ? "bg-emerald-500/15 text-emerald-400" : "text-muted-foreground hover:text-foreground"}`}
+            >
+              <Cpu className="size-3" /> محلي (WASM)
+            </button>
+            <button
+              onClick={() => setProcessMode("cloud")}
+              className={`flex items-center gap-1.5 px-4 py-1.5 text-xs font-semibold transition ${processMode === "cloud" ? "bg-sky-500/15 text-sky-400" : "text-muted-foreground hover:text-foreground"}`}
+            >
+              <Cloud className="size-3" /> سحابي ☁
+            </button>
+          </div>
+          <span className="text-[10px] text-muted-foreground">
+            {processMode === "cloud" ? "يُعالج على السيرفر — مناسب للملفات الكبيرة" : "معالجة في المتصفح — خصوصية تامة"}
+          </span>
+        </div>
+      </div>
 
       <main className="mx-auto max-w-7xl px-4 py-5 grid gap-5 lg:grid-cols-[1fr_360px]">
         {/* Player */}

@@ -3,7 +3,7 @@ import { useRef, useState } from "react";
 import {
   ArrowRight, Upload, Sparkles, Loader2, CheckCircle2, AlertCircle,
   AlertTriangle, Info, ChevronRight, BarChart3, Cpu, Volume2,
-  Film, Zap, Shield, Monitor, Play,
+  Film, Zap, Shield, Monitor, Play, Download,
 } from "lucide-react";
 
 export const Route = createFileRoute("/analyze")({
@@ -90,16 +90,32 @@ function formatDuration(sec: number): string {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
+const EXEC_ARGS: Record<string, (inName: string, outName: string) => string[]> = {
+  "auto-enhance": (i, o) => ["-i", i, "-vf", "hqdn3d=3:2:4:3.5,eq=brightness=0.03:contrast=1.1:saturation=1.25:gamma=0.95,unsharp=5:5:0.5", "-c:v", "libx264", "-crf", "20", "-preset", "fast", "-c:a", "copy", o],
+  "upscale":      (i, o) => ["-i", i, "-vf", "scale=1920:1080:flags=lanczos", "-c:v", "libx264", "-crf", "18", "-preset", "fast", "-c:a", "copy", o],
+  "compress":     (i, o) => ["-i", i, "-c:v", "libx264", "-crf", "28", "-preset", "medium", "-c:a", "aac", "-b:a", "128k", o],
+  "denoise":      (i, o) => ["-i", i, "-vf", "hqdn3d=4:3:6:4.5", "-c:v", "libx264", "-crf", "20", "-preset", "fast", "-c:a", "copy", o],
+  "color-grade":  (i, o) => ["-i", i, "-vf", "eq=brightness=0.05:contrast=1.15:saturation=1.3:gamma=0.95", "-c:v", "libx264", "-crf", "20", "-preset", "fast", "-c:a", "copy", o],
+  "fps":          (i, o) => ["-i", i, "-filter:v", "fps=30", "-c:v", "libx264", "-crf", "20", "-preset", "fast", "-c:a", "copy", o],
+  "stabilize":    (i, o) => ["-i", i, "-vf", "vidstabtransform=smoothing=20,unsharp=3:3:0.5", "-c:v", "libx264", "-crf", "20", "-preset", "fast", "-c:a", "copy", o],
+};
+
+interface ExecResult { url: string; name: string; mode: string; }
+
 function AnalyzePage() {
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [execBusy, setExecBusy] = useState<string | null>(null);
+  const [execProgress, setExecProgress] = useState(0);
+  const [execResult, setExecResult] = useState<ExecResult | null>(null);
+  const [execError, setExecError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   async function onAnalyze() {
     if (!file) return;
-    setBusy(true); setError(null); setResult(null);
+    setBusy(true); setError(null); setResult(null); setExecResult(null);
     try {
       const fd = new FormData();
       fd.append("file", file);
@@ -109,6 +125,35 @@ function AnalyzePage() {
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally { setBusy(false); }
+  }
+
+  async function executeRec(mode: string) {
+    if (!file || execBusy) return;
+    const builderFn = EXEC_ARGS[mode] ?? EXEC_ARGS["auto-enhance"];
+    const ext = file.name.split(".").pop() || "mp4";
+    const inName = `input.${ext}`;
+    const outName = `output_${mode}.mp4`;
+    const args = builderFn(inName, outName);
+    setExecBusy(mode); setExecProgress(5); setExecError(null); setExecResult(null);
+    try {
+      setExecProgress(15);
+      const fd = new FormData();
+      fd.append("file", file, inName);
+      fd.append("args", JSON.stringify(args));
+      fd.append("outputName", outName);
+      const res = await fetch("/api/cloud-exec", { method: "POST", body: fd });
+      if (!res.ok) throw new Error(await res.text());
+      setExecProgress(85);
+      const blob = await res.blob();
+      setExecProgress(100);
+      setExecResult({
+        url: URL.createObjectURL(new Blob([await blob.arrayBuffer()], { type: "video/mp4" })),
+        name: outName,
+        mode,
+      });
+    } catch (e) {
+      setExecError(e instanceof Error ? e.message : String(e));
+    } finally { setExecBusy(null); }
   }
 
   const vi = result?.videoInfo;
@@ -271,19 +316,84 @@ function AnalyzePage() {
                         <p className="font-semibold text-sm leading-snug">{rec.title}</p>
                         <p className="text-xs text-muted-foreground mt-1 leading-relaxed">{rec.desc}</p>
                       </div>
-                      {dest && (
-                        <Link
-                          to={dest.href as any}
-                          className="shrink-0 inline-flex items-center gap-1 text-xs font-semibold text-violet-400 hover:text-violet-300 transition whitespace-nowrap"
-                        >
-                          {dest.label} <ChevronRight className="size-3" />
-                        </Link>
-                      )}
+                      <div className="shrink-0 flex flex-col items-end gap-1.5">
+                        {rec.mode && EXEC_ARGS[rec.mode] && (
+                          <button
+                            onClick={() => executeRec(rec.mode!)}
+                            disabled={!!execBusy || !file}
+                            className={`inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-lg border transition disabled:opacity-40 whitespace-nowrap
+                              ${execBusy === rec.mode
+                                ? "bg-violet-500/15 border-violet-500/40 text-violet-400 cursor-wait"
+                                : "bg-violet-500/10 border-violet-500/30 text-violet-400 hover:bg-violet-500/25"}`}
+                          >
+                            {execBusy === rec.mode
+                              ? <><Loader2 className="size-3 animate-spin" /> جاري التنفيذ...</>
+                              : <><Play className="size-3" /> تنفيذ الآن</>}
+                          </button>
+                        )}
+                        {dest && (
+                          <Link
+                            to={dest.href as any}
+                            className="inline-flex items-center gap-1 text-[10px] font-medium text-muted-foreground hover:text-violet-400 transition whitespace-nowrap"
+                          >
+                            {dest.label} <ChevronRight className="size-3" />
+                          </Link>
+                        )}
+                      </div>
                     </div>
                   );
                 })}
               </div>
             </div>
+
+            {/* Inline Exec Progress / Result */}
+            {(execBusy || execResult || execError) && (
+              <div className="rounded-2xl border border-violet-500/30 bg-card/60 overflow-hidden">
+                <div className="flex items-center gap-2 px-5 py-3 border-b border-border bg-card">
+                  <Play className="size-4 text-violet-400" />
+                  <h3 className="font-bold text-sm">نتيجة التنفيذ المباشر</h3>
+                </div>
+                <div className="p-5 space-y-4">
+                  {execBusy && (
+                    <div className="space-y-2">
+                      <div className="flex justify-between text-xs text-muted-foreground">
+                        <span className="flex items-center gap-1.5"><Loader2 className="size-3 animate-spin text-violet-400" /> جاري تطبيق التوصية على السيرفر...</span>
+                        <span>{execProgress}%</span>
+                      </div>
+                      <div className="h-2 rounded-full bg-muted overflow-hidden">
+                        <div
+                          className="h-full bg-gradient-to-r from-violet-500 to-purple-500 transition-all duration-500"
+                          style={{ width: `${execProgress}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
+                  {execError && (
+                    <div className="flex items-start gap-3 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3">
+                      <AlertCircle className="size-4 text-red-400 shrink-0 mt-0.5" />
+                      <p className="text-xs text-red-400">{execError}</p>
+                    </div>
+                  )}
+                  {execResult && (
+                    <div className="space-y-3">
+                      <div className="flex items-center gap-2 text-sm">
+                        <CheckCircle2 className="size-4 text-emerald-400" />
+                        <span className="font-semibold">اكتملت المعالجة بنجاح!</span>
+                        <span className="text-xs text-muted-foreground">— {execResult.name}</span>
+                      </div>
+                      <video src={execResult.url} controls className="w-full rounded-xl border border-border max-h-64 bg-black" />
+                      <a
+                        href={execResult.url}
+                        download={execResult.name}
+                        className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-5 py-2.5 text-sm font-bold text-white hover:opacity-90 transition shadow-lg shadow-emerald-500/20"
+                      >
+                        <Download className="size-4" /> تحميل الملف المحسّن
+                      </a>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
             {/* Action Buttons */}
             <div className="rounded-2xl border border-violet-500/20 bg-gradient-to-br from-violet-500/8 to-purple-500/5 p-5">
